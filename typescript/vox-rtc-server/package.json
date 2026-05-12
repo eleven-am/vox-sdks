@@ -1,6 +1,6 @@
 {
   "name": "@eleven-am/vox-rtc-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Server-side TypeScript SDK for Vox-hosted WebRTC control sessions",
   "license": "GPL-3.0",
   "main": "./dist/index.js",

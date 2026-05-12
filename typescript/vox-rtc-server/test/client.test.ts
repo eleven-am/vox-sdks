@@ -70,35 +70,53 @@ class FakeSocket {
 }
 
 test("createSession parses the RTC bootstrap response", async () => {
-  const client = new VoxRtcServerClient({
-    httpBase: "https://vox.example.com/",
-    fetch: async () => new Response(JSON.stringify({
-      session_id: "rtc_123",
-      client_token: "tok_123",
-      expires_at: "2026-01-01T00:00:00Z",
-      join_token_ttl_seconds: 120,
-      ice_servers: [{ urls: ["stun:turn.example.com:3478"] }],
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }) as Response,
-    socketFactory: () => new FakeSocket() as never,
-  });
+  const previous = process.env.VOX_API_KEY;
+  process.env.VOX_API_KEY = "secret";
+  try {
+    const client = new VoxRtcServerClient({
+      httpBase: "https://vox.example.com/",
+      fetch: async (_input, init) => {
+        assert.equal((init?.headers as Record<string, string>).authorization, "Bearer secret");
+        return new Response(JSON.stringify({
+          session_id: "rtc_123",
+          client_token: "tok_123",
+          expires_at: "2026-01-01T00:00:00Z",
+          join_token_ttl_seconds: 120,
+          ice_servers: [{ urls: ["stun:turn.example.com:3478"] }],
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }) as Response;
+      },
+      socketFactory: () => new FakeSocket() as never,
+    });
 
-  const bootstrap = await client.createSession();
-  assert.equal(bootstrap.sessionId, "rtc_123");
-  assert.equal(bootstrap.clientToken, "tok_123");
-  assert.equal(bootstrap.joinTokenTtlSeconds, 120);
-  assert.equal(client.httpBase, "https://vox.example.com");
-  assert.equal(client.socketBase, "https://vox.example.com/v1/socket");
+    const bootstrap = await client.createSession();
+    assert.equal(bootstrap.sessionId, "rtc_123");
+    assert.equal(bootstrap.clientToken, "tok_123");
+    assert.equal(bootstrap.joinTokenTtlSeconds, 120);
+    assert.equal(client.httpBase, "https://vox.example.com");
+    assert.equal(client.socketBase, "https://vox.example.com/v1/socket");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.VOX_API_KEY;
+    } else {
+      process.env.VOX_API_KEY = previous;
+    }
+  }
 });
 
 test("attachSession joins the RTC channel and sends the expected control messages", async () => {
   const fakeSocket = new FakeSocket();
+  let receivedParams: Record<string, unknown> | null = null;
   const client = new VoxRtcServerClient({
     httpBase: "https://vox.example.com",
     fetch,
-    socketFactory: () => fakeSocket as never,
+    apiKey: "secret",
+    socketFactory: (_endpoint, params) => {
+      receivedParams = params;
+      return fakeSocket as never;
+    },
   });
 
   const session = await client.attachSession("rtc_123");
@@ -131,6 +149,7 @@ test("attachSession joins the RTC channel and sends the expected control message
       turn_detector: "livekit",
     },
   });
+  assert.deepEqual(receivedParams, { api_key: "secret" });
 });
 
 test("onEvent maps PondSocket messages into Vox wire events", async () => {

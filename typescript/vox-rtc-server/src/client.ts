@@ -17,6 +17,14 @@ function defaultSocketBase(httpBase: string): string {
   return `${normalizeBase(httpBase)}/v1/socket`;
 }
 
+function defaultApiKey(): string | null {
+  if (typeof process === "undefined" || !process.env) {
+    return null;
+  }
+  const value = process.env.VOX_API_KEY?.trim();
+  return value ? value : null;
+}
+
 function toBootstrap(data: Record<string, unknown>): VoxRtcSessionBootstrap {
   return {
     sessionId: String(data.session_id),
@@ -37,6 +45,7 @@ function defaultSocketFactory(
 
 export class VoxRtcServerClient {
   readonly #httpBase: string;
+  readonly #apiKey: string | null;
   readonly #socketBase: string;
   readonly #fetch: typeof fetch;
   readonly #socketParams: Record<string, unknown>;
@@ -49,6 +58,7 @@ export class VoxRtcServerClient {
 
   constructor(options: VoxRtcServerClientOptions) {
     this.#httpBase = normalizeBase(options.httpBase);
+    this.#apiKey = options.apiKey?.trim() || defaultApiKey();
     this.#socketBase = options.socketBase ? normalizeBase(options.socketBase) : defaultSocketBase(options.httpBase);
     this.#fetch = options.fetch ?? fetch;
     this.#socketParams = options.socketParams ?? {};
@@ -116,9 +126,13 @@ export class VoxRtcServerClient {
   }
 
   async createSession(): Promise<VoxRtcSessionBootstrap> {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (this.#apiKey) {
+      headers.authorization = `Bearer ${this.#apiKey}`;
+    }
     const response = await this.#fetch(`${this.#httpBase}/v1/rtc/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify({}),
     });
 
@@ -150,7 +164,11 @@ export class VoxRtcServerClient {
 
   #ensureSocket(): SocketClientLike {
     if (!this.#socket) {
-      this.#socket = this.#socketFactory(this.#socketBase, this.#socketParams, {
+      const params = { ...this.#socketParams };
+      if (this.#apiKey) {
+        params.api_key = this.#apiKey;
+      }
+      this.#socket = this.#socketFactory(this.#socketBase, params, {
         connectionTimeout: this.#connectionTimeoutMs,
         maxReconnectDelay: this.#maxReconnectDelayMs,
       });

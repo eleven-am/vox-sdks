@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/eleven-am/vox-sdks/go/rtcserver"
 )
@@ -27,6 +28,7 @@ import (
 func main() {
 	client := rtcserver.NewClient(rtcserver.ClientOptions{
 		HTTPBase: "https://vox.example.com",
+		APIKey:   os.Getenv("VOX_API_KEY"),
 	})
 
 	ctx := context.Background()
@@ -54,3 +56,5 @@ func main() {
 	session.SendTextResponse("Hello from Go.", nil, true)
 }
 ```
+
+If `APIKey` is omitted, the client falls back to `VOX_API_KEY`.

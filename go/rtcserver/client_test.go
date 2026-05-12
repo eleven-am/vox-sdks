@@ -79,9 +79,13 @@ func (f *fakeSocket) OnConnectionChange(callback func(connected bool)) func() {
 }
 
 func TestCreateSession(t *testing.T) {
+	t.Setenv("VOX_API_KEY", "secret")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/rtc/sessions" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer secret" {
+			t.Fatalf("unexpected authorization header: %q", got)
 		}
 		_ = json.NewEncoder(w).Encode(SessionBootstrap{
 			SessionID:           "rtc_123",
@@ -107,9 +111,13 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 	fake := &fakeSocket{channel: &fakeChannel{}}
 	client := NewClient(ClientOptions{
 		HTTPBase:          "https://vox.example.com",
+		APIKey:            "secret",
 		ConnectionTimeout: 500 * time.Millisecond,
 	})
 	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+		if params["api_key"] != "secret" {
+			t.Fatalf("unexpected socket api_key: %#v", params["api_key"])
+		}
 		return fake, nil
 	}
 

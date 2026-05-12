@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ type socketClient interface {
 
 type Client struct {
 	httpBase            string
+	apiKey              string
 	socketBase          string
 	httpClient          *http.Client
 	socketFactory       func(endpoint string, params map[string]interface{}) (socketClient, error)
@@ -41,6 +43,7 @@ type Client struct {
 
 type ClientOptions struct {
 	HTTPBase          string
+	APIKey            string
 	SocketBase        string
 	HTTPClient        *http.Client
 	ConnectionTimeout time.Duration
@@ -58,14 +61,26 @@ func NewClient(options ClientOptions) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
+	apiKey := strings.TrimSpace(options.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("VOX_API_KEY"))
+	}
+	socketParams := map[string]interface{}{}
+	for key, value := range options.SocketParams {
+		socketParams[key] = value
+	}
+	if apiKey != "" {
+		socketParams["api_key"] = apiKey
+	}
 
 	return &Client{
 		httpBase:          httpBase,
+		apiKey:            apiKey,
 		socketBase:        strings.TrimRight(socketBase, "/"),
 		httpClient:        httpClient,
 		connectionTimeout: valueOrDefaultDuration(options.ConnectionTimeout, 10*time.Second),
 		maxReconnectDelay: valueOrDefaultDuration(options.MaxReconnectDelay, 30*time.Second),
-		socketParams:      options.SocketParams,
+		socketParams:      socketParams,
 		socketFactory: func(endpoint string, params map[string]interface{}) (socketClient, error) {
 			return newRawSocketClient(endpoint, params)
 		},
@@ -124,6 +139,9 @@ func (c *Client) CreateSession(ctx context.Context) (*SessionBootstrap, error) {
 		return nil, err
 	}
 	req.Header.Set("content-type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

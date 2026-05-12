@@ -19,13 +19,19 @@ It is not the SDK for plain STT/TTS or generic non-RTC Vox APIs.
 npm install @eleven-am/vox-rtc-server
 ```
 
+Authentication:
+
+- pass `apiKey` explicitly, or
+- set `VOX_API_KEY` in the environment
+
 ## Example
 
 ```ts
 import { VoxRtcServerClient } from "@eleven-am/vox-rtc-server";
 
 const client = new VoxRtcServerClient({
-  httpBase: "https://vox.example.com"
+  httpBase: "https://vox.example.com",
+  apiKey: process.env.VOX_API_KEY
 });
 
 await client.connect();

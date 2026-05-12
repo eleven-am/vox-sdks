@@ -11,6 +11,8 @@ Current scope:
 
 This repository is intentionally narrow. It is for apps that manage Vox-hosted WebRTC calls. It is not the general STT/TTS/text SDK surface.
 
+When Vox is configured with `VOX_API_KEY`, these SDKs authenticate the RTC session bootstrap over HTTP and the `/v1/socket` control connection automatically.
+
 Packages:
 
 - `typescript/vox-rtc-server`

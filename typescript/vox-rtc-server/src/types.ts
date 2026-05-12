@@ -44,6 +44,7 @@ export type Unsubscribe = () => void;
 
 export interface VoxRtcServerClientOptions {
   httpBase: string;
+  apiKey?: string;
   socketBase?: string;
   socketParams?: Record<string, unknown>;
   fetch?: typeof fetch;

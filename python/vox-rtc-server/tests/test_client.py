@@ -109,12 +109,15 @@ class FakeHTTPResponse:
         return self._body
 
 
-def test_create_session_parses_the_rtc_bootstrap_response() -> None:
+def test_create_session_parses_the_rtc_bootstrap_response(monkeypatch: Any) -> None:
+    monkeypatch.setenv("VOX_API_KEY", "secret")
+
     def fake_urlopen(request: Any, timeout: float | None = None) -> FakeHTTPResponse:
         assert request.full_url == "https://vox.example.com/v1/rtc/sessions"
         assert request.method == "POST"
         assert timeout == 15.0
         assert json.loads(request.data.decode("utf-8")) == {}
+        assert request.get_header("Authorization") == "Bearer secret"
         return FakeHTTPResponse(
             200,
             {
@@ -143,9 +146,11 @@ def test_create_session_parses_the_rtc_bootstrap_response() -> None:
 
 def test_attach_session_joins_and_sends_expected_control_messages() -> None:
     fake_socket = FakeSocket()
+    captured_params: dict[str, Any] = {}
     client = VoxRtcServerClient(
         http_base="https://vox.example.com",
-        socket_factory=lambda *args: fake_socket,
+        api_key="secret",
+        socket_factory=lambda _endpoint, params, *_args: captured_params.update(params) or fake_socket,
     )
 
     session = asyncio.run(client.attach_session("rtc_123"))
@@ -185,6 +190,7 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
             "turn_detector": "livekit",
         }
     }
+    assert captured_params == {"api_key": "secret"}
 
 
 def test_on_event_maps_socket_messages_into_wire_events() -> None:

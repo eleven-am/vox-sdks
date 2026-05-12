@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Mapping
 from typing import Any
 from urllib.request import Request, urlopen
@@ -71,6 +72,7 @@ class VoxRtcServerClient:
     __slots__ = (
         "_connection_timeout",
         "_http_base",
+        "_api_key",
         "_join_timeout",
         "_max_reconnect_delay",
         "_request_timeout",
@@ -85,6 +87,7 @@ class VoxRtcServerClient:
         self,
         *,
         http_base: str,
+        api_key: str | None = None,
         socket_base: str | None = None,
         socket_params: Mapping[str, Any] | None = None,
         connection_timeout: float = 10.0,
@@ -95,10 +98,15 @@ class VoxRtcServerClient:
         urlopen_impl: Any = urlopen,
     ) -> None:
         self._http_base = _normalize_base(http_base)
+        resolved_api_key = (api_key if api_key is not None else os.environ.get("VOX_API_KEY", "")).strip()
+        self._api_key = resolved_api_key or None
         self._socket_base = (
             _normalize_base(socket_base) if socket_base else _default_socket_base(http_base)
         )
-        self._socket_params = dict(socket_params or {})
+        merged_socket_params = dict(socket_params or {})
+        if self._api_key:
+            merged_socket_params["api_key"] = self._api_key
+        self._socket_params = merged_socket_params
         self._connection_timeout = connection_timeout
         self._max_reconnect_delay = max_reconnect_delay
         self._request_timeout = request_timeout
@@ -174,6 +182,8 @@ class VoxRtcServerClient:
             headers={"content-type": "application/json"},
             method="POST",
         )
+        if self._api_key:
+            request.add_header("authorization", f"Bearer {self._api_key}")
         with self._urlopen(request, timeout=self._request_timeout) as response:
             status = int(response.status) if hasattr(response, "status") else int(response.getcode())
             body = response.read().decode("utf-8")

@@ -20,11 +20,13 @@ pip install vox-rtc-server pondsocket-client
 
 The SDK uses the PondSocket Python client for the control-plane socket.
 Until `pondsocket-client` is published, install it from your local checkout or git ref.
+Authentication can be passed explicitly with `api_key=...` or through `VOX_API_KEY`.
 
 ## Example
 
 ```python
 import asyncio
+import os
 
 from vox_rtc_server import (
     ClientEventEnvelope,
@@ -34,7 +36,10 @@ from vox_rtc_server import (
 
 
 async def main() -> None:
-    client = VoxRtcServerClient(http_base="https://vox.example.com")
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        api_key=os.environ.get("VOX_API_KEY"),
+    )
 
     bootstrap, session = await client.create_controlled_session()
     print("session:", bootstrap.session_id)
