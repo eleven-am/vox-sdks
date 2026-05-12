@@ -1,0 +1,26 @@
+{
+  "name": "@eleven-am/vox-rtc-server",
+  "version": "0.1.0",
+  "description": "Server-side TypeScript SDK for Vox-hosted WebRTC control sessions",
+  "license": "GPL-3.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@eleven-am/pondsocket-client": "^0.0.35"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
