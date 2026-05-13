@@ -43,9 +43,9 @@ func (f *fakeChannel) OnChannelStateChange(callback func(state channelState)) fu
 }
 
 type fakeSocket struct {
-	connected     bool
-	channel       *fakeChannel
-	connHandlers  []func(bool)
+	connected    bool
+	channel      *fakeChannel
+	connHandlers []func(bool)
 }
 
 func (f *fakeSocket) Connect() error {
@@ -137,13 +137,19 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 	session.SendTextResponse("hello", nil, true)
 	session.SendClientEvent(ClientEvent{Event: "render.url", Payload: map[string]interface{}{"url": "https://example.com"}})
 
-	if len(fake.channel.sent) != 6 {
+	if len(fake.channel.sent) != 3 {
 		t.Fatalf("unexpected message count: %d", len(fake.channel.sent))
 	}
 	if fake.channel.sent[0].event != "session.update" {
 		t.Fatalf("unexpected first event: %s", fake.channel.sent[0].event)
 	}
-	if fake.channel.sent[5].event != "client.event" {
-		t.Fatalf("unexpected final event: %s", fake.channel.sent[5].event)
+	if fake.channel.sent[1].event != "response.replace_text" {
+		t.Fatalf("unexpected response event: %s", fake.channel.sent[1].event)
+	}
+	if fake.channel.sent[2].event != "client.event" {
+		t.Fatalf("unexpected final event: %s", fake.channel.sent[2].event)
+	}
+	if fake.channel.sent[1].payload["text"] != "hello" {
+		t.Fatalf("unexpected response text: %v", fake.channel.sent[1].payload["text"])
 	}
 }

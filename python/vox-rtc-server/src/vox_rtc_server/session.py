@@ -136,6 +136,15 @@ class VoxRtcControlSession:
     def cancel_response(self) -> None:
         self.send_control("response.cancel")
 
+    def replace_response_text(
+        self,
+        text: str,
+        options: ResponseOptions | None = None,
+    ) -> None:
+        payload = _response_options_payload(options)
+        payload["text"] = text
+        self.send_control("response.replace_text", payload)
+
     def send_text_response(
         self,
         text: str,
@@ -144,7 +153,8 @@ class VoxRtcControlSession:
         cancel_first: bool = True,
     ) -> None:
         if cancel_first:
-            self.cancel_response()
+            self.replace_response_text(text, options)
+            return
         self.start_response(options)
         self.append_response_text(text, options)
         self.commit_response()

@@ -141,9 +141,14 @@ export class VoxRtcControlSession {
     this.sendControl("response.cancel");
   }
 
+  replaceResponseText(text: string, options?: VoxRtcResponseOptions): void {
+    this.sendControl("response.replace_text", withAllowInterruptions({ text }, options));
+  }
+
   sendTextResponse(text: string, options?: VoxRtcResponseOptions & { cancelFirst?: boolean }): void {
     if (options?.cancelFirst !== false) {
-      this.cancelResponse();
+      this.replaceResponseText(text, options);
+      return;
     }
     this.startResponse(options);
     this.appendResponseText(text, options);

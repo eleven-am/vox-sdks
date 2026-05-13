@@ -174,10 +174,7 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
 
     assert [event for event, _payload in fake_socket.channel.sent] == [
         "session.update",
-        "response.cancel",
-        "response.start",
-        "response.delta",
-        "response.commit",
+        "response.replace_text",
         "client.event",
     ]
     assert fake_socket.channel.sent[0][1] == {
@@ -190,6 +187,7 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
             "turn_detector": "livekit",
         }
     }
+    assert fake_socket.channel.sent[1][1] == {"text": "Hello"}
     assert captured_params == {"api_key": "secret"}
 
 

@@ -133,10 +133,7 @@ test("attachSession joins the RTC channel and sends the expected control message
 
   assert.deepEqual(fakeSocket.channel.sent.map((item) => item.event), [
     "session.update",
-    "response.cancel",
-    "response.start",
-    "response.delta",
-    "response.commit",
+    "response.replace_text",
     "client.event",
   ]);
   assert.deepEqual(fakeSocket.channel.sent[0]?.payload, {
@@ -149,6 +146,7 @@ test("attachSession joins the RTC channel and sends the expected control message
       turn_detector: "livekit",
     },
   });
+  assert.deepEqual(fakeSocket.channel.sent[1]?.payload, { text: "Hello" });
   assert.deepEqual(receivedParams, { api_key: "secret" });
 });
 

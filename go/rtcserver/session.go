@@ -130,9 +130,16 @@ func (s *ControlSession) CancelResponse() {
 	s.SendControl("response.cancel", nil)
 }
 
+func (s *ControlSession) ReplaceResponseText(text string, options *ResponseOptions) {
+	payload := responseOptionsPayload(options)
+	payload["text"] = text
+	s.SendControl("response.replace_text", payload)
+}
+
 func (s *ControlSession) SendTextResponse(text string, options *ResponseOptions, cancelFirst bool) {
 	if cancelFirst {
-		s.CancelResponse()
+		s.ReplaceResponseText(text, options)
+		return
 	}
 	s.StartResponse(options)
 	s.AppendResponseText(text, options)
