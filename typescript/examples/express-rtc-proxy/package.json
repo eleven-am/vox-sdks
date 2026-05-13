@@ -1,0 +1,18 @@
+{
+  "name": "@eleven-am/vox-rtc-server-example",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Tiny Express server that uses the Vox RTC server SDK and serves a browser test page",
+  "license": "GPL-3.0",
+  "main": "./server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@eleven-am/vox-rtc-server": "file:../../vox-rtc-server",
+    "express": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

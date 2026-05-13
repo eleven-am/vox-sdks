@@ -21,6 +21,10 @@ Packages:
 
 The browser media path stays separate. These SDKs are for backend/server control of RTC sessions.
 
+Examples:
+
+- `typescript/examples/express-rtc-proxy` serves a browser WebRTC test page and uses the TypeScript SDK from a tiny Express backend.
+
 ## Versioning
 
 Each package is versioned independently.
