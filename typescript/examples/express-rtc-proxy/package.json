@@ -6,11 +6,17 @@
   "license": "GPL-3.0",
   "main": "./server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "vite build"
   },
   "dependencies": {
+    "@eleven-am/vox-rtc-client": "file:../../vox-rtc-client",
     "@eleven-am/vox-rtc-server": "file:../../vox-rtc-server",
-    "express": "^5.1.0"
+    "@vitejs/plugin-react": "^5.1.1",
+    "express": "^5.1.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "vite": "^7.3.0"
   },
   "engines": {
     "node": ">=20"

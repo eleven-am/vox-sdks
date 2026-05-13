@@ -1,6 +1,6 @@
 # Vox RTC Express Proxy Example
 
-Tiny Express server that uses `@eleven-am/vox-rtc-server` for the control plane and serves a browser page from the same origin for manual testing.
+Tiny Express server that uses `@eleven-am/vox-rtc-server` for the control plane and serves a React browser app that uses `@eleven-am/vox-rtc-client` for WebRTC media.
 
 ## Environment
 
@@ -17,6 +17,8 @@ Optional:
 
 ```bash
 npm install
+cd ../../vox-rtc-client && npm install && npm run build
+cd ../examples/express-rtc-proxy
 VOX_HTTP_BASE=https://vox.horus.maix.ovh VOX_API_KEY=... npm start
 ```
 
@@ -26,7 +28,8 @@ Open:
 
 ## Shape
 
-- Browser handles WebRTC media directly with Vox
+- React imports `@eleven-am/vox-rtc-client`
+- Browser handles WebRTC media directly with Vox through the client SDK
 - Express handles:
   - `POST /api/rtc/session`
   - `GET /api/rtc/session/:id/events`

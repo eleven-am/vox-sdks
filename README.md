@@ -16,10 +16,11 @@ When Vox is configured with `VOX_API_KEY`, these SDKs authenticate the RTC sessi
 Packages:
 
 - `typescript/vox-rtc-server`
+- `typescript/vox-rtc-client`
 - `go/rtcserver`
 - `python/vox-rtc-server`
 
-The browser media path stays separate. These SDKs are for backend/server control of RTC sessions.
+The server SDKs control RTC sessions from trusted backends. The browser client SDK joins the media path from frontend applications without holding a Vox API key.
 
 Examples:
 

@@ -28,7 +28,6 @@ const sdkClient = new VoxRtcServerClient({
 const sessions = new Map();
 
 app.use(express.json({ limit: "256kb" }));
-app.use(express.static(path.join(__dirname, "public")));
 
 function writeSse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -208,12 +207,44 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`vox-rtc express proxy listening on http://127.0.0.1:${PORT}`);
+async function attachFrontend() {
+  if (process.env.NODE_ENV === "production") {
+    const dist = path.join(__dirname, "dist");
+    app.use(express.static(dist));
+    app.use((req, res, next) => {
+      if (req.method === "GET" && !req.path.startsWith("/api/")) {
+        res.sendFile(path.join(dist, "index.html"));
+        return;
+      }
+      next();
+    });
+    return;
+  }
+
+  const { createServer } = await import("vite");
+  const vite = await createServer({
+    root: __dirname,
+    appType: "spa",
+    server: {
+      middlewareMode: true,
+    },
+  });
+  app.use(vite.middlewares);
+}
+
+let server;
+
+attachFrontend().then(() => {
+  server = app.listen(PORT, () => {
+    console.log(`vox-rtc express proxy listening on http://127.0.0.1:${PORT}`);
+  });
+}).catch((error) => {
+  console.error(error);
+  process.exit(1);
 });
 
 async function shutdown() {
-  server.close();
+  server?.close();
   for (const sessionId of [...sessions.keys()]) {
     await closeSession(sessionId);
   }
