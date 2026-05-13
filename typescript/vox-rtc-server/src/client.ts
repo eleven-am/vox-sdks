@@ -43,6 +43,10 @@ function defaultSocketFactory(
   return new PondClient(endpoint, params, options);
 }
 
+function defaultFetch(...args: Parameters<typeof fetch>): ReturnType<typeof fetch> {
+  return globalThis.fetch(...args);
+}
+
 export class VoxRtcServerClient {
   readonly #httpBase: string;
   readonly #apiKey: string | null;
@@ -60,7 +64,7 @@ export class VoxRtcServerClient {
     this.#httpBase = normalizeBase(options.httpBase);
     this.#apiKey = options.apiKey?.trim() || defaultApiKey();
     this.#socketBase = options.socketBase ? normalizeBase(options.socketBase) : defaultSocketBase(options.httpBase);
-    this.#fetch = options.fetch ?? fetch;
+    this.#fetch = options.fetch ?? defaultFetch;
     this.#socketParams = options.socketParams ?? {};
     this.#socketFactory = options.socketFactory ?? defaultSocketFactory;
     this.#connectionTimeoutMs = options.connectionTimeoutMs ?? 10_000;

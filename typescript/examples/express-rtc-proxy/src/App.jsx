@@ -349,4 +349,6 @@ function App() {
   );
 }
 
-createRoot(document.querySelector("#root")).render(<App />);
+const rootElement = document.querySelector("#root");
+globalThis.__voxRtcDemoRoot ??= createRoot(rootElement);
+globalThis.__voxRtcDemoRoot.render(<App />);

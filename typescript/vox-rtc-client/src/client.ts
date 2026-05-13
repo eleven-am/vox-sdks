@@ -89,6 +89,10 @@ function defaultGetUserMedia(constraints: MediaStreamConstraints): Promise<Media
   return navigator.mediaDevices.getUserMedia(constraints);
 }
 
+function defaultFetch(...args: Parameters<typeof fetch>): ReturnType<typeof fetch> {
+  return globalThis.fetch(...args);
+}
+
 function parseDataMessage(data: unknown): VoxRtcClientEventEnvelope | { raw: unknown } {
   if (typeof data !== "string") {
     return { raw: data };
@@ -134,7 +138,7 @@ export class VoxRtcBrowserClient {
   #pendingCandidates: Array<RTCIceCandidateInit | null> = [];
 
   constructor(options: VoxRtcBrowserClientOptions = {}) {
-    this.#fetch = options.fetch ?? fetch;
+    this.#fetch = options.fetch ?? defaultFetch;
     this.#peerConnectionFactory = options.peerConnectionFactory ?? defaultPeerConnectionFactory;
     this.#eventSourceFactory = options.eventSourceFactory ?? defaultEventSourceFactory;
     this.#getUserMedia = options.getUserMedia ?? defaultGetUserMedia;
