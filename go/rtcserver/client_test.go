@@ -198,3 +198,94 @@ func TestOnEventIncludesSessionMetadata(t *testing.T) {
 		t.Fatalf("unexpected event data: %#v", received.Data)
 	}
 }
+
+func TestNamedEventHooks(t *testing.T) {
+	fake := &fakeSocket{channel: &fakeChannel{}}
+	client := NewClient(ClientOptions{
+		HTTPBase:          "https://vox.example.com",
+		ConnectionTimeout: 500 * time.Millisecond,
+	})
+	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+		return fake, nil
+	}
+
+	session, err := client.AttachSession(context.Background(), "rtc_123")
+	if err != nil {
+		t.Fatalf("AttachSession returned error: %v", err)
+	}
+
+	var transcript TranscriptEvent
+	var turn TurnStateEvent
+	var response ResponseEvent
+	var browserEvent BrowserEvent
+	var closeEvent CloseEvent
+
+	session.OnTranscript(func(event TranscriptEvent) {
+		transcript = event
+	})
+	session.OnTurnStateChanged(func(event TurnStateEvent) {
+		turn = event
+	})
+	session.OnResponseDone(func(event ResponseEvent) {
+		response = event
+	})
+	session.OnBrowserEvent(func(event BrowserEvent) {
+		browserEvent = event
+	})
+	session.OnClose(func(event CloseEvent) {
+		closeEvent = event
+	})
+
+	fake.channel.emit(EventTranscriptCompleted, map[string]interface{}{
+		"transcript":      "hello world",
+		"language":        "en",
+		"start_ms":        10,
+		"end_ms":          20,
+		"eou_probability": 0.7,
+		"topics":          []interface{}{"hello"},
+		"session_id":      "rtc_123",
+	})
+	fake.channel.emit(EventTurnStateChanged, map[string]interface{}{
+		"state":          "speaking",
+		"previous_state": "idle",
+		"session_id":     "rtc_123",
+	})
+	fake.channel.emit(EventResponseDone, map[string]interface{}{
+		"response_id": "resp_1",
+		"session_id":  "rtc_123",
+	})
+	fake.channel.emit(EventBrowserEvent, map[string]interface{}{
+		"event":      "ui.select",
+		"payload":    map[string]interface{}{"id": "choice-a"},
+		"session_id": "rtc_123",
+	})
+	fake.channel.emit(EventRTCClientDisconnected, map[string]interface{}{
+		"reason":               "data_channel_closed",
+		"connection_state":     "connected",
+		"ice_connection_state": "completed",
+		"data_channel_state":   "closed",
+		"session_id":           "rtc_123",
+	})
+
+	if transcript.Transcript != "hello world" || transcript.Language != "en" {
+		t.Fatalf("unexpected transcript event: %#v", transcript)
+	}
+	if transcript.SessionID != "rtc_123" || transcript.ChannelName != "/rtc/rtc_123" {
+		t.Fatalf("unexpected transcript metadata: %#v", transcript)
+	}
+	if len(transcript.Topics) != 1 || transcript.Topics[0] != "hello" {
+		t.Fatalf("unexpected topics: %#v", transcript.Topics)
+	}
+	if turn.State != "speaking" || turn.PreviousState != "idle" {
+		t.Fatalf("unexpected turn event: %#v", turn)
+	}
+	if response.ResponseID != "resp_1" {
+		t.Fatalf("unexpected response event: %#v", response)
+	}
+	if browserEvent.Event != "ui.select" {
+		t.Fatalf("unexpected browser event: %#v", browserEvent)
+	}
+	if closeEvent.Reason != "data_channel_closed" || closeEvent.DataChannelState != "closed" {
+		t.Fatalf("unexpected close event: %#v", closeEvent)
+	}
+}

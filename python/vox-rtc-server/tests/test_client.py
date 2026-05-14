@@ -220,3 +220,96 @@ def test_on_event_maps_socket_messages_into_wire_events() -> None:
             "/rtc/rtc_123",
         )
     ]
+
+
+def test_named_event_hooks_map_common_vox_events() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+
+    session = asyncio.run(client.attach_session("rtc_123"))
+    transcripts: list[Any] = []
+    turns: list[Any] = []
+    responses: list[Any] = []
+    browser_events: list[Any] = []
+    closes: list[Any] = []
+
+    unsub_transcript = session.on_transcript(transcripts.append)
+    unsub_turn = session.on_turn_state_changed(turns.append)
+    unsub_done = session.on_response_done(responses.append)
+    unsub_browser = session.on_browser_event(browser_events.append)
+    unsub_close = session.on_close(closes.append)
+
+    fake_socket.channel.emit(
+        "conversation.item.input_audio_transcription.completed",
+        {
+            "transcript": "hello world",
+            "language": "en",
+            "start_ms": 10,
+            "end_ms": 20,
+            "eou_probability": 0.7,
+            "topics": ["hello"],
+            "session_id": "rtc_123",
+        },
+    )
+    fake_socket.channel.emit(
+        "turn.state_changed",
+        {"state": "speaking", "previous_state": "idle", "session_id": "rtc_123"},
+    )
+    fake_socket.channel.emit(
+        "response.done",
+        {"response_id": "resp_1", "session_id": "rtc_123"},
+    )
+    fake_socket.channel.emit(
+        "browser.event",
+        {
+            "event": "ui.select",
+            "payload": {"id": "choice-a"},
+            "session_id": "rtc_123",
+        },
+    )
+    fake_socket.channel.emit(
+        "rtc.client.disconnected",
+        {
+            "reason": "data_channel_closed",
+            "connection_state": "connected",
+            "ice_connection_state": "completed",
+            "data_channel_state": "closed",
+            "session_id": "rtc_123",
+        },
+    )
+
+    unsub_transcript()
+    unsub_turn()
+    unsub_done()
+    unsub_browser()
+    unsub_close()
+
+    assert len(transcripts) == 1
+    assert transcripts[0].transcript == "hello world"
+    assert transcripts[0].language == "en"
+    assert transcripts[0].start_ms == 10
+    assert transcripts[0].end_ms == 20
+    assert transcripts[0].eou_probability == 0.7
+    assert transcripts[0].topics == ["hello"]
+    assert transcripts[0].session_id == "rtc_123"
+    assert transcripts[0].channel_name == "/rtc/rtc_123"
+
+    assert len(turns) == 1
+    assert turns[0].state == "speaking"
+    assert turns[0].previous_state == "idle"
+
+    assert len(responses) == 1
+    assert responses[0].response_id == "resp_1"
+
+    assert len(browser_events) == 1
+    assert browser_events[0].event == "ui.select"
+    assert browser_events[0].payload == {"id": "choice-a"}
+
+    assert len(closes) == 1
+    assert closes[0].reason == "data_channel_closed"
+    assert closes[0].connection_state == "connected"
+    assert closes[0].ice_connection_state == "completed"
+    assert closes[0].data_channel_state == "closed"

@@ -34,17 +34,20 @@ client.on("state", (state) => {
   console.log(state.status, state.peerConnectionState, state.dataChannelState);
 });
 
-client.on("dataMessage", (message) => {
-  console.log("backend event", message);
+client.onClientEvent((message) => {
+  console.log("server event", message.event, message.payload);
 });
 
 await client.connect();
 
 client.sendEvent({
-  event: "render.url",
-  payload: { url: "https://example.com" }
+  event: "ui.select",
+  payload: { id: "choice-a" }
 });
 ```
+
+`onClientEvent` receives events the backend sent with `sendClientEvent`.
+`sendEvent` sends browser-originated app events to the backend as `browser.event`.
 
 ## Session Sources
 

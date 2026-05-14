@@ -172,3 +172,128 @@ test("onEvent maps PondSocket messages into Vox wire events", async () => {
     channelName: "/rtc/rtc_123",
   }]);
 });
+
+test("named event hooks map common Vox events", async () => {
+  const fakeSocket = new FakeSocket();
+  const client = new VoxRtcServerClient({
+    httpBase: "https://vox.example.com",
+    fetch,
+    socketFactory: () => fakeSocket as never,
+  });
+
+  const session = await client.attachSession("rtc_123");
+  const transcripts: unknown[] = [];
+  const turns: unknown[] = [];
+  const responses: unknown[] = [];
+  const browserEvents: unknown[] = [];
+  const closes: unknown[] = [];
+
+  const unsubscribeTranscript = session.onTranscript((event) => transcripts.push(event));
+  const unsubscribeTurn = session.onTurnStateChanged((event) => turns.push(event));
+  const unsubscribeDone = session.onResponseDone((event) => responses.push(event));
+  const unsubscribeBrowser = session.onBrowserEvent((event) => browserEvents.push(event));
+  const unsubscribeClose = session.onClose((event) => closes.push(event));
+
+  fakeSocket.channel.emit("conversation.item.input_audio_transcription.completed", {
+    transcript: "hello world",
+    language: "en",
+    start_ms: 10,
+    end_ms: 20,
+    eou_probability: 0.7,
+    topics: ["hello"],
+    session_id: "rtc_123",
+  });
+  fakeSocket.channel.emit("turn.state_changed", {
+    state: "speaking",
+    previous_state: "idle",
+    session_id: "rtc_123",
+  });
+  fakeSocket.channel.emit("response.done", {
+    response_id: "resp_1",
+    session_id: "rtc_123",
+  });
+  fakeSocket.channel.emit("browser.event", {
+    event: "ui.select",
+    payload: { id: "choice-a" },
+    session_id: "rtc_123",
+  });
+  fakeSocket.channel.emit("rtc.client.disconnected", {
+    reason: "data_channel_closed",
+    connection_state: "connected",
+    ice_connection_state: "completed",
+    data_channel_state: "closed",
+    session_id: "rtc_123",
+  });
+
+  unsubscribeTranscript();
+  unsubscribeTurn();
+  unsubscribeDone();
+  unsubscribeBrowser();
+  unsubscribeClose();
+
+  assert.deepEqual(transcripts, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      transcript: "hello world",
+      language: "en",
+      start_ms: 10,
+      end_ms: 20,
+      eou_probability: 0.7,
+      topics: ["hello"],
+      session_id: "rtc_123",
+    },
+    transcript: "hello world",
+    language: "en",
+    startMs: 10,
+    endMs: 20,
+    eouProbability: 0.7,
+    topics: ["hello"],
+  }]);
+  assert.deepEqual(turns, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      state: "speaking",
+      previous_state: "idle",
+      session_id: "rtc_123",
+    },
+    state: "speaking",
+    previousState: "idle",
+  }]);
+  assert.deepEqual(responses, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      response_id: "resp_1",
+      session_id: "rtc_123",
+    },
+    responseId: "resp_1",
+  }]);
+  assert.deepEqual(browserEvents, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      event: "ui.select",
+      payload: { id: "choice-a" },
+      session_id: "rtc_123",
+    },
+    event: "ui.select",
+    payload: { id: "choice-a" },
+  }]);
+  assert.deepEqual(closes, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      reason: "data_channel_closed",
+      connection_state: "connected",
+      ice_connection_state: "completed",
+      data_channel_state: "closed",
+      session_id: "rtc_123",
+    },
+    reason: "data_channel_closed",
+    connectionState: "connected",
+    iceConnectionState: "completed",
+    dataChannelState: "closed",
+  }]);
+});

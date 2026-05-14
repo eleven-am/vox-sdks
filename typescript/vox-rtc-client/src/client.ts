@@ -183,6 +183,10 @@ export class VoxRtcBrowserClient {
     };
   }
 
+  onClientEvent(handler: (event: VoxRtcClientEventEnvelope) => void): Unsubscribe {
+    return this.on("clientEvent", handler);
+  }
+
   async connect(options: VoxRtcBrowserConnectOptions = {}): Promise<VoxRtcBrowserSessionBootstrap> {
     if (this.#status === "connected" || this.#status === "connecting") {
       throw new Error(`Vox RTC client is already ${this.#status}`);
@@ -352,7 +356,11 @@ export class VoxRtcBrowserClient {
       this.#emit("dataChannelError", event);
     };
     channel.onmessage = (event) => {
-      this.#emit("dataMessage", parseDataMessage(event.data));
+      const message = parseDataMessage(event.data);
+      this.#emit("dataMessage", message);
+      if ("event" in message) {
+        this.#emit("clientEvent", message);
+      }
     };
   }
 

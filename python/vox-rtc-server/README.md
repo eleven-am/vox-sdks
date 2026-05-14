@@ -7,7 +7,7 @@ This package is for backend applications that need to:
 - create RTC sessions over HTTP
 - attach to `/v1/socket`
 - join `/rtc/{session_id}`
-- send `session.update`, `response.*`, and `client.event`
+- send `session.update`, `response.*`, and server-to-browser `client.event`
 - observe RTC control events
 
 It is intentionally narrow. It is not the general STT/TTS/text SDK.
@@ -44,7 +44,9 @@ async def main() -> None:
     bootstrap, session = await client.create_controlled_session()
     print("session:", bootstrap.session_id)
 
-    session.on_event(lambda event: print(event.session_id, event.type, event.data))
+    session.on_transcript(lambda event: print("user said:", event.transcript))
+    session.on_browser_event(lambda event: print("browser event:", event.event, event.payload))
+    session.on_close(lambda event: print("browser disconnected:", event.reason))
 
     session.configure(
         SessionConfig(
@@ -68,3 +70,5 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+`send_client_event` is server to browser. Browser-originated app events arrive through `on_browser_event`.

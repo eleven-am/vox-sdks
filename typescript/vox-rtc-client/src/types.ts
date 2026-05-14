@@ -50,6 +50,7 @@ export interface VoxRtcBrowserEvents {
   dataChannelOpen: RTCDataChannel;
   dataChannelClose: RTCDataChannel;
   dataChannelError: Event;
+  clientEvent: VoxRtcClientEventEnvelope;
   dataMessage: VoxRtcClientEventEnvelope | { raw: unknown };
   localIceCandidate: RTCIceCandidateInit | null;
   serverIceCandidate: RTCIceCandidateInit | null;

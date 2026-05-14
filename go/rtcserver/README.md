@@ -7,7 +7,7 @@ This package is for backend services that need to:
 - create RTC sessions over HTTP
 - attach to `/v1/socket`
 - join `/rtc/{session_id}`
-- send `session.update`, `response.*`, and `client.event`
+- send `session.update`, `response.*`, and server-to-browser `client.event`
 - observe RTC control events
 
 It is intentionally narrow. It is not the general STT/TTS/text SDK.
@@ -40,8 +40,16 @@ func main() {
 
 	log.Printf("session: %s", bootstrap.SessionID)
 
-	session.OnEvent(func(event rtcserver.WireEvent) {
-		log.Printf("%s %s %#v", event.SessionID, event.Type, event.Data)
+	session.OnTranscript(func(event rtcserver.TranscriptEvent) {
+		log.Printf("user said: %s", event.Transcript)
+	})
+
+	session.OnBrowserEvent(func(event rtcserver.BrowserEvent) {
+		log.Printf("browser event: %s %#v", event.Event, event.Payload)
+	})
+
+	session.OnClose(func(event rtcserver.CloseEvent) {
+		log.Printf("browser disconnected: %s", event.Reason)
 	})
 
 	session.Configure(rtcserver.SessionConfig{
@@ -54,7 +62,12 @@ func main() {
 	})
 
 	session.SendTextResponse("Hello from Go.", nil, true)
+	session.SendClientEvent(rtcserver.ClientEvent{
+		Event:   "render.url",
+		Payload: map[string]interface{}{"url": "https://example.com"},
+	})
 }
 ```
 
 If `APIKey` is omitted, the client falls back to `VOX_API_KEY`.
+`SendClientEvent` is server to browser. Browser-originated app events arrive through `OnBrowserEvent`.

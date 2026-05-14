@@ -3,11 +3,35 @@ import { ChannelState } from "@eleven-am/pondsocket-client";
 import type {
   SocketChannelLike,
   Unsubscribe,
+  VoxRtcBrowserEvent,
+  VoxRtcCloseEvent,
   VoxRtcClientEventEnvelope,
+  VoxRtcErrorEvent,
+  VoxRtcInterruptionEvent,
+  VoxRtcResponseEvent,
   VoxRtcResponseOptions,
+  VoxRtcSessionAttachedEvent,
   VoxRtcSessionConfig,
+  VoxRtcSessionCreatedEvent,
+  VoxRtcTranscriptEvent,
+  VoxRtcTurnStateEvent,
   VoxRtcWireEvent,
 } from "./types.js";
+
+const EVT_CLOSE = "rtc.client.disconnected";
+const EVT_BROWSER_EVENT = "browser.event";
+const EVT_ERROR = "error";
+const EVT_INTERRUPTION_DETECTED = "interruption.detected";
+const EVT_INTERRUPTION_FALSE_POSITIVE = "interruption.false_positive";
+const EVT_RESPONSE_AUDIO_CLEAR = "response.audio.clear";
+const EVT_RESPONSE_CANCELLED = "response.cancelled";
+const EVT_RESPONSE_COMMITTED = "response.committed";
+const EVT_RESPONSE_CREATED = "response.created";
+const EVT_RESPONSE_DONE = "response.done";
+const EVT_RTC_SESSION_ATTACHED = "rtc.session.attached";
+const EVT_SESSION_CREATED = "session.created";
+const EVT_TRANSCRIPT_COMPLETED = "conversation.item.input_audio_transcription.completed";
+const EVT_TURN_STATE_CHANGED = "turn.state_changed";
 
 function toWireEvent(
   type: string,
@@ -19,6 +43,82 @@ function toWireEvent(
     return { type, data: payload as Record<string, unknown>, sessionId, channelName };
   }
   return { type, data: { payload: payload ?? null }, sessionId, channelName };
+}
+
+function payloadRecord(payload: unknown): Record<string, unknown> {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    return payload as Record<string, unknown>;
+  }
+  return { payload: payload ?? null };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function requiredString(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function optionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((item): item is string => typeof item === "string");
+  return strings.length === value.length ? strings : undefined;
+}
+
+function baseEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  channelName: string,
+): { sessionId: string; channelName: string; data: Record<string, unknown> } {
+  return {
+    sessionId: requiredString(payload.session_id, sessionId),
+    channelName,
+    data: payload,
+  };
+}
+
+function responseEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  channelName: string,
+): VoxRtcResponseEvent {
+  return {
+    ...baseEvent(payload, sessionId, channelName),
+    responseId: optionalString(payload.response_id),
+  };
+}
+
+function interruptionEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  channelName: string,
+): VoxRtcInterruptionEvent {
+  return {
+    ...responseEvent(payload, sessionId, channelName),
+    vadActiveMs: optionalNumber(payload.vad_active_ms),
+    partialTranscript: payload.partial_transcript === null
+      ? null
+      : optionalString(payload.partial_transcript),
+  };
+}
+
+function closeEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  channelName: string,
+): VoxRtcCloseEvent {
+  return {
+    ...baseEvent(payload, sessionId, channelName),
+    reason: requiredString(payload.reason, "unknown"),
+    connectionState: optionalString(payload.connection_state),
+    iceConnectionState: optionalString(payload.ice_connection_state),
+    dataChannelState: optionalString(payload.data_channel_state),
+  };
 }
 
 function withAllowInterruptions(
@@ -92,12 +192,118 @@ export class VoxRtcControlSession {
   on(eventType: string, handler: (payload: Record<string, unknown>) => void): Unsubscribe {
     return this.#channel.onMessage((event, payload) => {
       if (event === eventType) {
-        if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-          handler(payload as Record<string, unknown>);
-        } else {
-          handler({ payload: payload ?? null });
-        }
+        handler(payloadRecord(payload));
       }
+    });
+  }
+
+  onSessionAttached(handler: (event: VoxRtcSessionAttachedEvent) => void): Unsubscribe {
+    return this.on(EVT_RTC_SESSION_ATTACHED, (payload) => {
+      handler(baseEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onSessionCreated(handler: (event: VoxRtcSessionCreatedEvent) => void): Unsubscribe {
+    return this.on(EVT_SESSION_CREATED, (payload) => {
+      const session = payload.session && typeof payload.session === "object" && !Array.isArray(payload.session)
+        ? payload.session as Record<string, unknown>
+        : undefined;
+      handler({
+        ...baseEvent(payload, this.#sessionId, this.#channelName),
+        session,
+      });
+    });
+  }
+
+  onTranscript(handler: (event: VoxRtcTranscriptEvent) => void): Unsubscribe {
+    return this.on(EVT_TRANSCRIPT_COMPLETED, (payload) => {
+      handler({
+        ...baseEvent(payload, this.#sessionId, this.#channelName),
+        transcript: requiredString(payload.transcript, ""),
+        language: optionalString(payload.language),
+        startMs: optionalNumber(payload.start_ms),
+        endMs: optionalNumber(payload.end_ms),
+        eouProbability: optionalNumber(payload.eou_probability),
+        topics: optionalStringArray(payload.topics),
+      });
+    });
+  }
+
+  onTurnStateChanged(handler: (event: VoxRtcTurnStateEvent) => void): Unsubscribe {
+    return this.on(EVT_TURN_STATE_CHANGED, (payload) => {
+      handler({
+        ...baseEvent(payload, this.#sessionId, this.#channelName),
+        state: requiredString(payload.state, "unknown"),
+        previousState: optionalString(payload.previous_state),
+      });
+    });
+  }
+
+  onResponseCreated(handler: (event: VoxRtcResponseEvent) => void): Unsubscribe {
+    return this.on(EVT_RESPONSE_CREATED, (payload) => {
+      handler(responseEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onResponseCommitted(handler: (event: VoxRtcResponseEvent) => void): Unsubscribe {
+    return this.on(EVT_RESPONSE_COMMITTED, (payload) => {
+      handler(responseEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onResponseDone(handler: (event: VoxRtcResponseEvent) => void): Unsubscribe {
+    return this.on(EVT_RESPONSE_DONE, (payload) => {
+      handler(responseEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onResponseCancelled(handler: (event: VoxRtcResponseEvent) => void): Unsubscribe {
+    return this.on(EVT_RESPONSE_CANCELLED, (payload) => {
+      handler(responseEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onResponseAudioClear(handler: (event: VoxRtcResponseEvent) => void): Unsubscribe {
+    return this.on(EVT_RESPONSE_AUDIO_CLEAR, (payload) => {
+      handler(responseEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onInterruptionDetected(handler: (event: VoxRtcInterruptionEvent) => void): Unsubscribe {
+    return this.on(EVT_INTERRUPTION_DETECTED, (payload) => {
+      handler(interruptionEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onInterruptionFalsePositive(handler: (event: VoxRtcInterruptionEvent) => void): Unsubscribe {
+    return this.on(EVT_INTERRUPTION_FALSE_POSITIVE, (payload) => {
+      handler(interruptionEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onBrowserEvent(handler: (event: VoxRtcBrowserEvent) => void): Unsubscribe {
+    return this.on(EVT_BROWSER_EVENT, (payload) => {
+      handler({
+        ...baseEvent(payload, this.#sessionId, this.#channelName),
+        event: requiredString(payload.event, ""),
+        payload: payload.payload ?? null,
+      });
+    });
+  }
+
+  onClose(handler: (event: VoxRtcCloseEvent) => void): Unsubscribe {
+    return this.on(EVT_CLOSE, (payload) => {
+      handler(closeEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onError(handler: (event: VoxRtcErrorEvent) => void): Unsubscribe {
+    return this.on(EVT_ERROR, (payload) => {
+      handler({
+        ...baseEvent(payload, this.#sessionId, this.#channelName),
+        message: optionalString(payload.message),
+        code: optionalString(payload.code),
+      });
     });
   }
 

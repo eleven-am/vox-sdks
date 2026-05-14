@@ -184,7 +184,46 @@ test("connect creates media session from sessionEndpoint", async () => {
   assert.equal(states.includes("connected"), true);
 });
 
-test("sendEvent writes app envelope to data channel", async () => {
+test("onClientEvent receives server-sent client events", async () => {
+  MockPeerConnection.instances = [];
+  const client = new VoxRtcBrowserClient({
+    session: bootstrap,
+    fetch: async (url) => {
+      if (String(url).endsWith("/offer")) {
+        return jsonResponse({
+          session_id: "rtc_test",
+          media_token: "media_token",
+          type: "answer",
+          sdp: "answer-sdp",
+          events_url: "/events",
+        });
+      }
+      return jsonResponse({});
+    },
+    getUserMedia: async () => new MockMediaStream() as unknown as MediaStream,
+    peerConnectionFactory: (config) => new MockPeerConnection(config) as unknown as RTCPeerConnection,
+    eventSourceFactory: (url) => new MockEventSource(url),
+  });
+
+  await client.connect();
+  const pc = MockPeerConnection.instances[0];
+  const received: unknown[] = [];
+  client.onClientEvent((event) => received.push(event));
+
+  pc.dataChannel.onmessage?.({
+    data: JSON.stringify({
+      event: "render.url",
+      payload: { url: "https://example.com" },
+    }),
+  } as MessageEvent);
+
+  assert.deepEqual(received, [{
+    event: "render.url",
+    payload: { url: "https://example.com" },
+  }]);
+});
+
+test("sendEvent writes browser-originated event envelope to data channel", async () => {
   MockPeerConnection.instances = [];
   const client = new VoxRtcBrowserClient({
     session: bootstrap,
@@ -209,11 +248,11 @@ test("sendEvent writes app envelope to data channel", async () => {
   const pc = MockPeerConnection.instances[0];
   pc.dataChannel.open();
 
-  client.sendEvent({ event: "render.url", payload: { url: "https://example.com" } });
+  client.sendEvent({ event: "ui.select", payload: { id: "choice-a" } });
 
   assert.deepEqual(JSON.parse(pc.dataChannel.sent[0]), {
-    event: "render.url",
-    payload: { url: "https://example.com" },
+    event: "ui.select",
+    payload: { id: "choice-a" },
   });
 });
 

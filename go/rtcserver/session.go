@@ -84,6 +84,147 @@ func (s *ControlSession) On(eventName string, handler func(map[string]interface{
 	})
 }
 
+func (s *ControlSession) OnSessionAttached(handler func(SessionAttachedEvent)) func() {
+	return s.On(EventRTCSessionAttached, func(payload map[string]interface{}) {
+		handler(SessionAttachedEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+		})
+	})
+}
+
+func (s *ControlSession) OnSessionCreated(handler func(SessionCreatedEvent)) func() {
+	return s.On(EventSessionCreated, func(payload map[string]interface{}) {
+		handler(SessionCreatedEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+			Session:     mapValue(payload, "session"),
+		})
+	})
+}
+
+func (s *ControlSession) OnTranscript(handler func(TranscriptEvent)) func() {
+	return s.On(EventTranscriptCompleted, func(payload map[string]interface{}) {
+		handler(TranscriptEvent{
+			SessionID:      eventSessionID(payload, s.sessionID),
+			ChannelName:    s.channelName,
+			Data:           payload,
+			Transcript:     stringValue(payload, "transcript", ""),
+			Language:       stringValue(payload, "language", ""),
+			StartMS:        numberValue(payload, "start_ms"),
+			EndMS:          numberValue(payload, "end_ms"),
+			EOUProbability: numberValue(payload, "eou_probability"),
+			Topics:         stringSliceValue(payload, "topics"),
+		})
+	})
+}
+
+func (s *ControlSession) OnTurnStateChanged(handler func(TurnStateEvent)) func() {
+	return s.On(EventTurnStateChanged, func(payload map[string]interface{}) {
+		handler(TurnStateEvent{
+			SessionID:     eventSessionID(payload, s.sessionID),
+			ChannelName:   s.channelName,
+			Data:          payload,
+			State:         stringValue(payload, "state", "unknown"),
+			PreviousState: stringValue(payload, "previous_state", ""),
+		})
+	})
+}
+
+func (s *ControlSession) OnResponseCreated(handler func(ResponseEvent)) func() {
+	return s.onResponseEvent(EventResponseCreated, handler)
+}
+
+func (s *ControlSession) OnResponseCommitted(handler func(ResponseEvent)) func() {
+	return s.onResponseEvent(EventResponseCommitted, handler)
+}
+
+func (s *ControlSession) OnResponseDone(handler func(ResponseEvent)) func() {
+	return s.onResponseEvent(EventResponseDone, handler)
+}
+
+func (s *ControlSession) OnResponseCancelled(handler func(ResponseEvent)) func() {
+	return s.onResponseEvent(EventResponseCancelled, handler)
+}
+
+func (s *ControlSession) OnResponseAudioClear(handler func(ResponseEvent)) func() {
+	return s.onResponseEvent(EventResponseAudioClear, handler)
+}
+
+func (s *ControlSession) onResponseEvent(eventName string, handler func(ResponseEvent)) func() {
+	return s.On(eventName, func(payload map[string]interface{}) {
+		handler(ResponseEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+			ResponseID:  stringValue(payload, "response_id", ""),
+		})
+	})
+}
+
+func (s *ControlSession) OnInterruptionDetected(handler func(InterruptionEvent)) func() {
+	return s.onInterruptionEvent(EventInterruptionDetected, handler)
+}
+
+func (s *ControlSession) OnInterruptionFalsePositive(handler func(InterruptionEvent)) func() {
+	return s.onInterruptionEvent(EventInterruptionFalsePositive, handler)
+}
+
+func (s *ControlSession) onInterruptionEvent(eventName string, handler func(InterruptionEvent)) func() {
+	return s.On(eventName, func(payload map[string]interface{}) {
+		handler(InterruptionEvent{
+			ResponseEvent: ResponseEvent{
+				SessionID:   eventSessionID(payload, s.sessionID),
+				ChannelName: s.channelName,
+				Data:        payload,
+				ResponseID:  stringValue(payload, "response_id", ""),
+			},
+			VADActiveMS:       numberValue(payload, "vad_active_ms"),
+			PartialTranscript: stringValue(payload, "partial_transcript", ""),
+		})
+	})
+}
+
+func (s *ControlSession) OnBrowserEvent(handler func(BrowserEvent)) func() {
+	return s.On(EventBrowserEvent, func(payload map[string]interface{}) {
+		handler(BrowserEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+			Event:       stringValue(payload, "event", ""),
+			Payload:     payload["payload"],
+		})
+	})
+}
+
+func (s *ControlSession) OnClose(handler func(CloseEvent)) func() {
+	return s.On(EventRTCClientDisconnected, func(payload map[string]interface{}) {
+		handler(CloseEvent{
+			SessionID:          eventSessionID(payload, s.sessionID),
+			ChannelName:        s.channelName,
+			Data:               payload,
+			Reason:             stringValue(payload, "reason", "unknown"),
+			ConnectionState:    stringValue(payload, "connection_state", ""),
+			ICEConnectionState: stringValue(payload, "ice_connection_state", ""),
+			DataChannelState:   stringValue(payload, "data_channel_state", ""),
+		})
+	})
+}
+
+func (s *ControlSession) OnError(handler func(ErrorEvent)) func() {
+	return s.On(EventError, func(payload map[string]interface{}) {
+		handler(ErrorEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+			Message:     stringValue(payload, "message", ""),
+			Code:        stringValue(payload, "code", ""),
+		})
+	})
+}
+
 func (s *ControlSession) SendControl(event string, payload map[string]interface{}) {
 	if payload == nil {
 		payload = map[string]interface{}{}
@@ -164,4 +305,78 @@ func responseOptionsPayload(options *ResponseOptions) map[string]interface{} {
 		payload["allow_interruptions"] = *options.AllowInterruptions
 	}
 	return payload
+}
+
+func eventSessionID(payload map[string]interface{}, fallback string) string {
+	return stringValue(payload, "session_id", fallback)
+}
+
+func stringValue(payload map[string]interface{}, key string, fallback string) string {
+	value, ok := payload[key]
+	if !ok {
+		return fallback
+	}
+	text, ok := value.(string)
+	if !ok || text == "" {
+		return fallback
+	}
+	return text
+}
+
+func numberValue(payload map[string]interface{}, key string) float64 {
+	switch value := payload[key].(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case int32:
+		return float64(value)
+	case uint:
+		return float64(value)
+	case uint64:
+		return float64(value)
+	case uint32:
+		return float64(value)
+	default:
+		return 0
+	}
+}
+
+func stringSliceValue(payload map[string]interface{}, key string) []string {
+	value, ok := payload[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []interface{}:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, text)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func mapValue(payload map[string]interface{}, key string) map[string]interface{} {
+	value, ok := payload[key]
+	if !ok {
+		return nil
+	}
+	typed, ok := value.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return typed
 }

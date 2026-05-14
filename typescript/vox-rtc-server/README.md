@@ -39,8 +39,16 @@ await client.connect();
 const bootstrap = await client.createSession();
 const rtc = await client.attachSession(bootstrap.sessionId);
 
-rtc.onEvent((event) => {
-  console.log(event.sessionId, event.type, event.data);
+rtc.onTranscript((event) => {
+  console.log("user said:", event.transcript);
+});
+
+rtc.onBrowserEvent((event) => {
+  console.log("browser event:", event.event, event.payload);
+});
+
+rtc.onClose((event) => {
+  console.log("browser disconnected:", event.reason);
 });
 
 rtc.configure({
@@ -53,4 +61,11 @@ rtc.configure({
 });
 
 rtc.sendTextResponse("Hello from the backend.");
+
+rtc.sendClientEvent({
+  event: "render.url",
+  payload: { url: "https://example.com" }
+});
 ```
+
+`sendClientEvent` is server to browser. Browser-originated app events arrive through `onBrowserEvent`.

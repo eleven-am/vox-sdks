@@ -3,26 +3,44 @@ from __future__ import annotations
 from .client import VoxRtcServerClient
 from .session import VoxRtcControlSession
 from .types import (
+    BrowserEvent,
     ChannelState,
     ClientEventEnvelope,
+    CloseEvent,
     ConnectionState,
+    ErrorEvent,
+    InterruptionEvent,
     RTCIceServer,
+    ResponseEvent,
     ResponseOptions,
     SessionBootstrap,
+    SessionAttachedEvent,
     SessionConfig,
+    SessionCreatedEvent,
+    TranscriptEvent,
+    TurnStateEvent,
     WireEvent,
 )
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 __all__ = [
+    "BrowserEvent",
     "ChannelState",
     "ClientEventEnvelope",
+    "CloseEvent",
     "ConnectionState",
+    "ErrorEvent",
+    "InterruptionEvent",
     "RTCIceServer",
+    "ResponseEvent",
     "ResponseOptions",
     "SessionBootstrap",
+    "SessionAttachedEvent",
     "SessionConfig",
+    "SessionCreatedEvent",
+    "TranscriptEvent",
+    "TurnStateEvent",
     "VoxRtcControlSession",
     "VoxRtcServerClient",
     "WireEvent",

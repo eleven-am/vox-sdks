@@ -38,6 +38,77 @@ export interface VoxRtcWireEvent {
   channelName: string;
 }
 
+export interface VoxRtcSessionAttachedEvent {
+  sessionId: string;
+  channelName: string;
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcSessionCreatedEvent {
+  sessionId: string;
+  channelName: string;
+  session?: Record<string, unknown>;
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcTranscriptEvent {
+  sessionId: string;
+  channelName: string;
+  transcript: string;
+  language?: string;
+  startMs?: number;
+  endMs?: number;
+  eouProbability?: number;
+  topics?: string[];
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcTurnStateEvent {
+  sessionId: string;
+  channelName: string;
+  state: string;
+  previousState?: string;
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcResponseEvent {
+  sessionId: string;
+  channelName: string;
+  responseId?: string;
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcInterruptionEvent extends VoxRtcResponseEvent {
+  vadActiveMs?: number;
+  partialTranscript?: string | null;
+}
+
+export interface VoxRtcBrowserEvent {
+  sessionId: string;
+  channelName: string;
+  event: string;
+  payload: unknown;
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcCloseEvent {
+  sessionId: string;
+  channelName: string;
+  reason: string;
+  connectionState?: string;
+  iceConnectionState?: string;
+  dataChannelState?: string;
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcErrorEvent {
+  sessionId: string;
+  channelName: string;
+  message?: string;
+  code?: string;
+  data: Record<string, unknown>;
+}
+
 export interface VoxRtcResponseOptions {
   allowInterruptions?: boolean;
 }

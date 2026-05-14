@@ -67,6 +67,86 @@ class WireEvent:
     channel_name: str
 
 
+@dataclass(slots=True)
+class SessionAttachedEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+
+
+@dataclass(slots=True)
+class SessionCreatedEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    session: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class TranscriptEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    transcript: str
+    language: str | None = None
+    start_ms: int | float | None = None
+    end_ms: int | float | None = None
+    eou_probability: int | float | None = None
+    topics: list[str] | None = None
+
+
+@dataclass(slots=True)
+class TurnStateEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    state: str
+    previous_state: str | None = None
+
+
+@dataclass(slots=True)
+class ResponseEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    response_id: str | None = None
+
+
+@dataclass(slots=True)
+class InterruptionEvent(ResponseEvent):
+    vad_active_ms: int | float | None = None
+    partial_transcript: str | None = None
+
+
+@dataclass(slots=True)
+class BrowserEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    event: str
+    payload: Any = None
+
+
+@dataclass(slots=True)
+class CloseEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    reason: str
+    connection_state: str | None = None
+    ice_connection_state: str | None = None
+    data_channel_state: str | None = None
+
+
+@dataclass(slots=True)
+class ErrorEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    message: str | None = None
+    code: str | None = None
+
+
 Unsubscribe: TypeAlias = Callable[[], None]
 
 

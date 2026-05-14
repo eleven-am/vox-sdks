@@ -5,14 +5,38 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .types import (
+    BrowserEvent,
     ChannelState,
     ClientEventEnvelope,
+    CloseEvent,
+    ErrorEvent,
+    InterruptionEvent,
     ResponseOptions,
+    ResponseEvent,
     SessionConfig,
+    SessionAttachedEvent,
+    SessionCreatedEvent,
     SocketChannelLike,
+    TranscriptEvent,
+    TurnStateEvent,
     Unsubscribe,
     WireEvent,
 )
+
+EVT_CLOSE = "rtc.client.disconnected"
+EVT_BROWSER_EVENT = "browser.event"
+EVT_ERROR = "error"
+EVT_INTERRUPTION_DETECTED = "interruption.detected"
+EVT_INTERRUPTION_FALSE_POSITIVE = "interruption.false_positive"
+EVT_RESPONSE_AUDIO_CLEAR = "response.audio.clear"
+EVT_RESPONSE_CANCELLED = "response.cancelled"
+EVT_RESPONSE_COMMITTED = "response.committed"
+EVT_RESPONSE_CREATED = "response.created"
+EVT_RESPONSE_DONE = "response.done"
+EVT_RTC_SESSION_ATTACHED = "rtc.session.attached"
+EVT_SESSION_CREATED = "session.created"
+EVT_TRANSCRIPT_COMPLETED = "conversation.item.input_audio_transcription.completed"
+EVT_TURN_STATE_CHANGED = "turn.state_changed"
 
 
 def _state_value(state: Any) -> str:
@@ -27,6 +51,26 @@ def _payload_dict(payload: Any) -> dict[str, Any]:
     if isinstance(payload, Mapping):
         return dict(payload)
     return {"payload": payload}
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _required_str(value: Any, fallback: str = "") -> str:
+    return value if isinstance(value, str) and value else fallback
+
+
+def _optional_number(value: Any) -> int | float | None:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _optional_str_list(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    if not all(isinstance(item, str) for item in value):
+        return None
+    return list(value)
 
 
 def _response_options_payload(options: ResponseOptions | None) -> dict[str, Any]:
@@ -100,6 +144,186 @@ class VoxRtcControlSession:
             handler(_payload_dict(getattr(message, "payload", None)))
 
         return self._channel.on_message_event(event_name, callback)
+
+    def on_session_attached(
+        self,
+        handler: Callable[[SessionAttachedEvent], None],
+    ) -> Unsubscribe:
+        return self.on(
+            EVT_RTC_SESSION_ATTACHED,
+            lambda payload: handler(
+                SessionAttachedEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                )
+            ),
+        )
+
+    def on_session_created(
+        self,
+        handler: Callable[[SessionCreatedEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            session = payload.get("session")
+            handler(
+                SessionCreatedEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    session=dict(session) if isinstance(session, Mapping) else None,
+                )
+            )
+
+        return self.on(EVT_SESSION_CREATED, emit)
+
+    def on_transcript(
+        self,
+        handler: Callable[[TranscriptEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                TranscriptEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    transcript=_required_str(payload.get("transcript")),
+                    language=_optional_str(payload.get("language")),
+                    start_ms=_optional_number(payload.get("start_ms")),
+                    end_ms=_optional_number(payload.get("end_ms")),
+                    eou_probability=_optional_number(payload.get("eou_probability")),
+                    topics=_optional_str_list(payload.get("topics")),
+                )
+            )
+
+        return self.on(EVT_TRANSCRIPT_COMPLETED, emit)
+
+    def on_turn_state_changed(
+        self,
+        handler: Callable[[TurnStateEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                TurnStateEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    state=_required_str(payload.get("state"), "unknown"),
+                    previous_state=_optional_str(payload.get("previous_state")),
+                )
+            )
+
+        return self.on(EVT_TURN_STATE_CHANGED, emit)
+
+    def _on_response_event(
+        self,
+        event_name: str,
+        handler: Callable[[ResponseEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                ResponseEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    response_id=_optional_str(payload.get("response_id")),
+                )
+            )
+
+        return self.on(event_name, emit)
+
+    def on_response_created(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+        return self._on_response_event(EVT_RESPONSE_CREATED, handler)
+
+    def on_response_committed(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+        return self._on_response_event(EVT_RESPONSE_COMMITTED, handler)
+
+    def on_response_done(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+        return self._on_response_event(EVT_RESPONSE_DONE, handler)
+
+    def on_response_cancelled(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+        return self._on_response_event(EVT_RESPONSE_CANCELLED, handler)
+
+    def on_response_audio_clear(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+        return self._on_response_event(EVT_RESPONSE_AUDIO_CLEAR, handler)
+
+    def _on_interruption_event(
+        self,
+        event_name: str,
+        handler: Callable[[InterruptionEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                InterruptionEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    response_id=_optional_str(payload.get("response_id")),
+                    vad_active_ms=_optional_number(payload.get("vad_active_ms")),
+                    partial_transcript=_optional_str(payload.get("partial_transcript")),
+                )
+            )
+
+        return self.on(event_name, emit)
+
+    def on_interruption_detected(
+        self,
+        handler: Callable[[InterruptionEvent], None],
+    ) -> Unsubscribe:
+        return self._on_interruption_event(EVT_INTERRUPTION_DETECTED, handler)
+
+    def on_interruption_false_positive(
+        self,
+        handler: Callable[[InterruptionEvent], None],
+    ) -> Unsubscribe:
+        return self._on_interruption_event(EVT_INTERRUPTION_FALSE_POSITIVE, handler)
+
+    def on_browser_event(
+        self,
+        handler: Callable[[BrowserEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                BrowserEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    event=_required_str(payload.get("event")),
+                    payload=payload.get("payload"),
+                )
+            )
+
+        return self.on(EVT_BROWSER_EVENT, emit)
+
+    def on_close(self, handler: Callable[[CloseEvent], None]) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                CloseEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    reason=_required_str(payload.get("reason"), "unknown"),
+                    connection_state=_optional_str(payload.get("connection_state")),
+                    ice_connection_state=_optional_str(payload.get("ice_connection_state")),
+                    data_channel_state=_optional_str(payload.get("data_channel_state")),
+                )
+            )
+
+        return self.on(EVT_CLOSE, emit)
+
+    def on_error(self, handler: Callable[[ErrorEvent], None]) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                ErrorEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    message=_optional_str(payload.get("message")),
+                    code=_optional_str(payload.get("code")),
+                )
+            )
+
+        return self.on(EVT_ERROR, emit)
 
     def send_control(self, event: str, payload: Mapping[str, Any] | None = None) -> None:
         self._channel.send_message(event, dict(payload or {}))
