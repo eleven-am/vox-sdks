@@ -44,7 +44,7 @@ async def main() -> None:
     bootstrap, session = await client.create_controlled_session()
     print("session:", bootstrap.session_id)
 
-    session.on_event(lambda event: print(event.type, event.data))
+    session.on_event(lambda event: print(event.session_id, event.type, event.data))
 
     session.configure(
         SessionConfig(

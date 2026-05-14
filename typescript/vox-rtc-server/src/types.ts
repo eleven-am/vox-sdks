@@ -34,6 +34,8 @@ export interface VoxRtcClientEventEnvelope {
 export interface VoxRtcWireEvent {
   type: string;
   data: Record<string, unknown>;
+  sessionId: string;
+  channelName: string;
 }
 
 export interface VoxRtcResponseOptions {

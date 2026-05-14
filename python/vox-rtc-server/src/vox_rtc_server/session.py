@@ -88,6 +88,8 @@ class VoxRtcControlSession:
                 WireEvent(
                     type=str(getattr(message, "event", "")),
                     data=_payload_dict(getattr(message, "payload", None)),
+                    session_id=self._session_id,
+                    channel_name=self._channel_name,
                 )
             )
 

@@ -76,6 +76,13 @@ function App() {
   const [playbackState, setPlaybackState] = useState("idle");
   const [interruptions, setInterruptions] = useState(0);
   const [falsePositives, setFalsePositives] = useState(0);
+  const [echoEnabled, setEchoEnabled] = useState(true);
+  const [echoCount, setEchoCount] = useState(0);
+  const [lastTranscript, setLastTranscript] = useState("none");
+  const [finalAfterStopMs, setFinalAfterStopMs] = useState(null);
+  const [echoLatencyMs, setEchoLatencyMs] = useState(null);
+  const [responseAcceptMs, setResponseAcceptMs] = useState(null);
+  const [responseDoneMs, setResponseDoneMs] = useState(null);
   const [assistantText, setAssistantText] = useState(defaultText);
   const [clientEventText, setClientEventText] = useState(defaultClientEvent);
   const [logs, setLogs] = useState([]);
@@ -115,6 +122,26 @@ function App() {
           payload: Object.prototype.hasOwnProperty.call(event.data || {}, "payload") ? event.data.payload : null,
         });
       }
+      if (event.type === "conversation.item.input_audio_transcription.completed") {
+        setLastTranscript(event.data?.transcript || "none");
+      }
+      if (event.type === "local.echo.sent") {
+        setEchoCount(event.data?.count || 0);
+        setEchoLatencyMs(event.data?.ms_since_transcript_received ?? null);
+        setPlaybackState("echo sent");
+      }
+      if (event.type === "local.echo.state") {
+        setEchoEnabled(event.data?.enabled !== false);
+      }
+      if (event.type === "local.timing.transcript_received") {
+        setFinalAfterStopMs(event.data?.ms_since_speech_stopped ?? null);
+      }
+      if (event.type === "local.timing.response_created") {
+        setResponseAcceptMs(event.data?.ms_since_transcript_received ?? null);
+      }
+      if (event.type === "local.timing.response_done") {
+        setResponseDoneMs(event.data?.ms_since_transcript_received ?? null);
+      }
       if (event.type === "session.created") setTurnState("listening");
       if (event.type === "response.created") setPlaybackState("starting");
       if (event.type === "response.done") setPlaybackState("done");
@@ -151,6 +178,12 @@ function App() {
 
   const connect = useCallback(async () => {
     setState((value) => ({ ...value, status: "connecting" }));
+    setEchoCount(0);
+    setLastTranscript("none");
+    setFinalAfterStopMs(null);
+    setEchoLatencyMs(null);
+    setResponseAcceptMs(null);
+    setResponseDoneMs(null);
     const client = new VoxRtcBrowserClient({
       audioElement: audioRef.current,
       audioConstraints: {
@@ -162,7 +195,7 @@ function App() {
       },
       session: async () => api("/api/rtc/session", {
         method: "POST",
-        body: JSON.stringify(config),
+        body: JSON.stringify({ ...config, echoTranscripts: echoEnabled }),
       }),
     });
     clientRef.current = client;
@@ -193,7 +226,7 @@ function App() {
       client.on("error", (error) => addLog("client.error", { message: error.message })),
     ];
     await client.connect();
-  }, [addDataEvent, addLog, addTimeline, config, openControlEvents]);
+  }, [addDataEvent, addLog, addTimeline, config, echoEnabled, openControlEvents]);
 
   const disconnect = useCallback(async () => {
     const oldSessionId = sessionId;
@@ -204,6 +237,12 @@ function App() {
     setSessionId(null);
     setTurnState("idle");
     setPlaybackState("idle");
+    setEchoCount(0);
+    setLastTranscript("none");
+    setFinalAfterStopMs(null);
+    setEchoLatencyMs(null);
+    setResponseAcceptMs(null);
+    setResponseDoneMs(null);
     setState({
       status: "closed",
       peerConnectionState: "idle",
@@ -229,6 +268,20 @@ function App() {
       method: "POST",
       body: JSON.stringify({}),
     });
+  }, [sessionId]);
+
+  const updateEchoEnabled = useCallback(async (enabled) => {
+    setEchoEnabled(enabled);
+    if (!sessionId) return;
+    try {
+      await api(`/api/rtc/session/${sessionId}/echo`, {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      });
+    } catch (error) {
+      setEchoEnabled(!enabled);
+      throw error;
+    }
   }, [sessionId]);
 
   const sendServerControlEvent = useCallback(async () => {
@@ -290,10 +343,25 @@ function App() {
         <Status label="Turn" value={turnState} />
         <Status label="Interruptions" value={String(interruptions)} />
         <Status label="False positives" value={String(falsePositives)} />
+        <Status label="Echo" value={echoEnabled ? "on" : "off"} />
+        <Status label="Echoes" value={String(echoCount)} />
+        <Status label="Final after stop" value={finalAfterStopMs === null ? "n/a" : `${finalAfterStopMs}ms`} />
+        <Status label="Echo send" value={echoLatencyMs === null ? "n/a" : `${echoLatencyMs}ms`} />
+        <Status label="Response accept" value={responseAcceptMs === null ? "n/a" : `${responseAcceptMs}ms`} />
+        <Status label="Response done" value={responseDoneMs === null ? "n/a" : `${responseDoneMs}ms`} />
         <Status label="Session" value={sessionId || "none"} />
       </section>
 
       <section>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={echoEnabled}
+            onChange={(event) => updateEchoEnabled(event.target.checked).catch((error) => addLog("error", { message: error.message }))}
+          />
+          <span>Server echo final transcripts</span>
+        </label>
+        <p className="hint">Last final transcript: {lastTranscript}</p>
         <div className="actions">
           <button disabled={connected || state.status === "connecting"} onClick={() => connect().catch((error) => addLog("error", { message: error.message }))}>Connect</button>
           <button disabled={!sessionId} onClick={() => disconnect().catch((error) => addLog("error", { message: error.message }))}>Disconnect</button>

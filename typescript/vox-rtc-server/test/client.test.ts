@@ -168,5 +168,7 @@ test("onEvent maps PondSocket messages into Vox wire events", async () => {
   assert.deepEqual(received, [{
     type: "turn.state_changed",
     data: { state: "speaking", session_id: "rtc_123" },
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
   }]);
 });

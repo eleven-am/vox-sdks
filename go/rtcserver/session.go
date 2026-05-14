@@ -67,7 +67,12 @@ func (s *ControlSession) Close() {
 
 func (s *ControlSession) OnEvent(handler func(WireEvent)) func() {
 	return s.channel.OnMessage(func(event string, payload map[string]interface{}) {
-		handler(WireEvent{Type: event, Data: payload})
+		handler(WireEvent{
+			Type:        event,
+			Data:        payload,
+			SessionID:   s.sessionID,
+			ChannelName: s.channelName,
+		})
 	})
 }
 

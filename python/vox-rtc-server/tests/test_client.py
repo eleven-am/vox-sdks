@@ -199,8 +199,12 @@ def test_on_event_maps_socket_messages_into_wire_events() -> None:
     )
 
     session = asyncio.run(client.attach_session("rtc_123"))
-    received: list[tuple[str, dict[str, Any]]] = []
-    unsubscribe = session.on_event(lambda event: received.append((event.type, event.data)))
+    received: list[tuple[str, dict[str, Any], str, str]] = []
+    unsubscribe = session.on_event(
+        lambda event: received.append(
+            (event.type, event.data, event.session_id, event.channel_name)
+        )
+    )
 
     fake_socket.channel.emit(
         "turn.state_changed",
@@ -209,5 +213,10 @@ def test_on_event_maps_socket_messages_into_wire_events() -> None:
     unsubscribe()
 
     assert received == [
-        ("turn.state_changed", {"state": "speaking", "session_id": "rtc_123"})
+        (
+            "turn.state_changed",
+            {"state": "speaking", "session_id": "rtc_123"},
+            "rtc_123",
+            "/rtc/rtc_123",
+        )
     ]

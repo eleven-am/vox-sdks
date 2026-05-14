@@ -63,6 +63,8 @@ class ClientEventEnvelope:
 class WireEvent:
     type: str
     data: dict[str, Any]
+    session_id: str
+    channel_name: str
 
 
 Unsubscribe: TypeAlias = Callable[[], None]

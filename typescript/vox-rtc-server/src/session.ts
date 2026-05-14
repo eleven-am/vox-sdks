@@ -9,11 +9,16 @@ import type {
   VoxRtcWireEvent,
 } from "./types.js";
 
-function toWireEvent(type: string, payload: unknown): VoxRtcWireEvent {
+function toWireEvent(
+  type: string,
+  payload: unknown,
+  sessionId: string,
+  channelName: string,
+): VoxRtcWireEvent {
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    return { type, data: payload as Record<string, unknown> };
+    return { type, data: payload as Record<string, unknown>, sessionId, channelName };
   }
-  return { type, data: { payload: payload ?? null } };
+  return { type, data: { payload: payload ?? null }, sessionId, channelName };
 }
 
 function withAllowInterruptions(
@@ -80,7 +85,7 @@ export class VoxRtcControlSession {
 
   onEvent(handler: (event: VoxRtcWireEvent) => void): Unsubscribe {
     return this.#channel.onMessage((event, payload) => {
-      handler(toWireEvent(event, payload));
+      handler(toWireEvent(event, payload, this.#sessionId, this.#channelName));
     });
   }
 

@@ -21,7 +21,16 @@ const sdkClient = new VoxRtcServerClient({
 /** @type {Map<string, {
  *   session: import("@eleven-am/vox-rtc-server").VoxRtcControlSession,
  *   bootstrap: import("@eleven-am/vox-rtc-server").VoxRtcSessionBootstrap,
- *   history: Array<{type: string, data: Record<string, unknown>, at: string}>,
+ *   echoEnabled: boolean,
+ *   echoPrefix: string,
+ *   echoCount: number,
+ *   timing: {
+ *     lastSpeechStoppedAt: number,
+ *     lastTranscriptAt: number,
+ *     lastEchoSentAt: number,
+ *     lastEchoResponseId?: string,
+ *   },
+ *   history: Array<{type: string, data: Record<string, unknown>, sessionId?: string, channelName?: string, at: string}>,
  *   subscribers: Set<import("express").Response>,
  *   unsubscribe: () => void,
  * }>} */
@@ -53,6 +62,110 @@ function mustGetSession(sessionId) {
   return state;
 }
 
+function completedTranscript(event) {
+  if (event.type !== "conversation.item.input_audio_transcription.completed") {
+    return "";
+  }
+  const transcript = event.data?.transcript;
+  return typeof transcript === "string" ? transcript.trim() : "";
+}
+
+function emitLocalEvent(state, type, data = {}) {
+  rememberEvent(state, {
+    type,
+    data,
+    at: new Date().toISOString(),
+  });
+}
+
+function responseId(event) {
+  const id = event.data?.response_id;
+  return typeof id === "string" ? id : "";
+}
+
+function observeTiming(state, event) {
+  const receivedAt = Date.now();
+  if (event.type === "input_audio_buffer.speech_stopped") {
+    state.timing.lastSpeechStoppedAt = receivedAt;
+    emitLocalEvent(state, "local.timing.speech_stopped", {});
+    return;
+  }
+
+  if (event.type === "conversation.item.input_audio_transcription.completed") {
+    state.timing.lastTranscriptAt = receivedAt;
+    emitLocalEvent(state, "local.timing.transcript_received", {
+      transcript: completedTranscript(event),
+      ms_since_speech_stopped: state.timing.lastSpeechStoppedAt
+        ? receivedAt - state.timing.lastSpeechStoppedAt
+        : null,
+    });
+    return;
+  }
+
+  if (!state.timing.lastEchoSentAt) {
+    return;
+  }
+
+  if (event.type === "response.created") {
+    const id = responseId(event);
+    state.timing.lastEchoResponseId = id || undefined;
+    emitLocalEvent(state, "local.timing.response_created", {
+      response_id: id,
+      ms_since_echo_sent: receivedAt - state.timing.lastEchoSentAt,
+      ms_since_transcript_received: state.timing.lastTranscriptAt
+        ? receivedAt - state.timing.lastTranscriptAt
+        : null,
+    });
+    return;
+  }
+
+  if (event.type === "response.committed" || event.type === "response.done" || event.type === "response.cancelled") {
+    const id = responseId(event);
+    if (id && state.timing.lastEchoResponseId && id !== state.timing.lastEchoResponseId) {
+      return;
+    }
+    emitLocalEvent(state, `local.timing.${event.type.replace("response.", "response_")}`, {
+      response_id: id,
+      ms_since_echo_sent: receivedAt - state.timing.lastEchoSentAt,
+      ms_since_transcript_received: state.timing.lastTranscriptAt
+        ? receivedAt - state.timing.lastTranscriptAt
+        : null,
+    });
+  }
+}
+
+function echoTranscript(state, event) {
+  if (!state.echoEnabled) {
+    return;
+  }
+  const transcript = completedTranscript(event);
+  if (!transcript) {
+    return;
+  }
+
+  const text = `${state.echoPrefix}${transcript}`;
+  try {
+    const sentAt = Date.now();
+    state.session.sendTextResponse(text, { allowInterruptions: true });
+    state.timing.lastEchoSentAt = sentAt;
+    state.timing.lastEchoResponseId = undefined;
+    state.echoCount += 1;
+    emitLocalEvent(state, "local.echo.sent", {
+      count: state.echoCount,
+      transcript,
+      text,
+      ms_since_transcript_received: state.timing.lastTranscriptAt
+        ? sentAt - state.timing.lastTranscriptAt
+        : null,
+    });
+  } catch (error) {
+    emitLocalEvent(state, "local.echo.failed", {
+      transcript,
+      message: error?.message || String(error),
+    });
+  }
+}
+
 async function closeSession(sessionId) {
   const state = sessions.get(sessionId);
   if (!state) {
@@ -79,17 +192,31 @@ app.post("/api/rtc/session", async (req, res, next) => {
     const state = {
       session,
       bootstrap,
+      echoEnabled: config.echoTranscripts !== false,
+      echoPrefix: typeof config.echoPrefix === "string" ? config.echoPrefix : "I heard: ",
+      echoCount: 0,
+      timing: {
+        lastSpeechStoppedAt: 0,
+        lastTranscriptAt: 0,
+        lastEchoSentAt: 0,
+        lastEchoResponseId: undefined,
+      },
       history: [],
       subscribers: new Set(),
       unsubscribe: () => {},
     };
 
     state.unsubscribe = session.onEvent((event) => {
-      rememberEvent(state, {
+      const wireEvent = {
         type: event.type,
         data: event.data,
+        sessionId: event.sessionId,
+        channelName: event.channelName,
         at: new Date().toISOString(),
-      });
+      };
+      rememberEvent(state, wireEvent);
+      observeTiming(state, wireEvent);
+      echoTranscript(state, wireEvent);
     });
 
     sessions.set(bootstrap.sessionId, state);
@@ -154,6 +281,17 @@ app.post("/api/rtc/session/:sessionId/respond", (req, res, next) => {
       allowInterruptions: req.body?.allowInterruptions !== false,
     });
     res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/rtc/session/:sessionId/echo", (req, res, next) => {
+  try {
+    const state = mustGetSession(req.params.sessionId);
+    state.echoEnabled = req.body?.enabled !== false;
+    emitLocalEvent(state, "local.echo.state", { enabled: state.echoEnabled });
+    res.json({ enabled: state.echoEnabled });
   } catch (error) {
     next(error);
   }

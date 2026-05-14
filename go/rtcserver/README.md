@@ -41,7 +41,7 @@ func main() {
 	log.Printf("session: %s", bootstrap.SessionID)
 
 	session.OnEvent(func(event rtcserver.WireEvent) {
-		log.Printf("%s %#v", event.Type, event.Data)
+		log.Printf("%s %s %#v", event.SessionID, event.Type, event.Data)
 	})
 
 	session.Configure(rtcserver.SessionConfig{

@@ -42,6 +42,12 @@ func (f *fakeChannel) OnChannelStateChange(callback func(state channelState)) fu
 	return func() {}
 }
 
+func (f *fakeChannel) emit(event string, payload map[string]interface{}) {
+	for _, handler := range f.msgHandlers {
+		handler(event, payload)
+	}
+}
+
 type fakeSocket struct {
 	connected    bool
 	channel      *fakeChannel
@@ -151,5 +157,44 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 	}
 	if fake.channel.sent[1].payload["text"] != "hello" {
 		t.Fatalf("unexpected response text: %v", fake.channel.sent[1].payload["text"])
+	}
+}
+
+func TestOnEventIncludesSessionMetadata(t *testing.T) {
+	fake := &fakeSocket{channel: &fakeChannel{}}
+	client := NewClient(ClientOptions{
+		HTTPBase:          "https://vox.example.com",
+		ConnectionTimeout: 500 * time.Millisecond,
+	})
+	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+		return fake, nil
+	}
+
+	session, err := client.AttachSession(context.Background(), "rtc_123")
+	if err != nil {
+		t.Fatalf("AttachSession returned error: %v", err)
+	}
+
+	var received WireEvent
+	unsubscribe := session.OnEvent(func(event WireEvent) {
+		received = event
+	})
+	fake.channel.emit("turn.state_changed", map[string]interface{}{
+		"state":      "speaking",
+		"session_id": "rtc_123",
+	})
+	unsubscribe()
+
+	if received.Type != "turn.state_changed" {
+		t.Fatalf("unexpected event type: %s", received.Type)
+	}
+	if received.SessionID != "rtc_123" {
+		t.Fatalf("unexpected session id: %s", received.SessionID)
+	}
+	if received.ChannelName != "/rtc/rtc_123" {
+		t.Fatalf("unexpected channel name: %s", received.ChannelName)
+	}
+	if received.Data["state"] != "speaking" {
+		t.Fatalf("unexpected event data: %#v", received.Data)
 	}
 }

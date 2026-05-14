@@ -40,7 +40,7 @@ const bootstrap = await client.createSession();
 const rtc = await client.attachSession(bootstrap.sessionId);
 
 rtc.onEvent((event) => {
-  console.log(event.type, event.data);
+  console.log(event.sessionId, event.type, event.data);
 });
 
 rtc.configure({

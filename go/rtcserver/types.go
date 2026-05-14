@@ -34,6 +34,8 @@ type ClientEvent struct {
 }
 
 type WireEvent struct {
-	Type string
-	Data map[string]interface{}
+	Type        string
+	Data        map[string]interface{}
+	SessionID   string
+	ChannelName string
 }
