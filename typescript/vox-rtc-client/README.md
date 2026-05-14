@@ -27,7 +27,11 @@ const audio = document.querySelector("audio")!;
 
 const client = new VoxRtcBrowserClient({
   sessionEndpoint: "/api/rtc/session",
-  audioElement: audio
+  audioElement: audio,
+  audioDucking: {
+    duckVolume: 0.2,
+    sustainedVolume: 0.05
+  }
 });
 
 client.on("state", (state) => {
@@ -78,3 +82,36 @@ new VoxRtcBrowserClient({
 ```
 
 The first two shapes are preferred for real apps because the backend can keep `VOX_API_KEY` private.
+
+## Audio Ducking
+
+Pass `audioDucking: true` or an options object to lower the provided audio element while Vox decides whether to interrupt the assistant. This is client-side UX only; Vox still owns VAD, interruption detection, and response cancellation.
+
+By default, ducking follows Vox control events. Your backend should forward the relevant Vox events to the browser, then call `client.handleControlEvent(event)`.
+
+```ts
+new VoxRtcBrowserClient({
+  sessionEndpoint: "/api/rtc/session",
+  audioElement: audio,
+  audioDucking: {
+    threshold: 0.035,
+    duckVolume: 0.2,
+    sustainedVolume: 0.05,
+    sustainedAfterMs: 700,
+    releaseDelayMs: 350
+  }
+});
+```
+
+```ts
+// from your app's server-events/WebSocket bridge
+client.handleControlEvent({
+  type: "input_audio_buffer.speech_started"
+});
+```
+
+Supported modes:
+
+- `vox`: duck only when your app forwards Vox control events. This avoids self-ducking from speaker leakage.
+- `local`: duck immediately from local microphone level. This is fastest but can self-duck if echo cancellation leaks assistant audio into the mic.
+- `hybrid`: duck immediately from local microphone level, then hold only if Vox confirms speech through forwarded control events.

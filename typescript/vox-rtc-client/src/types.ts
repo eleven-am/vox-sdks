@@ -20,6 +20,7 @@ export interface VoxRtcBrowserClientOptions {
   autoPlayRemoteAudio?: boolean;
   iceTransportPolicy?: RTCIceTransportPolicy;
   dataChannelLabel?: string;
+  audioDucking?: boolean | VoxRtcAudioDuckingOptions;
 }
 
 export interface VoxRtcBrowserConnectOptions {
@@ -31,6 +32,28 @@ export interface VoxRtcClientEventEnvelope {
   event: string;
   payload?: unknown;
 }
+
+export type VoxRtcAudioDuckingMode = "vox" | "local" | "hybrid";
+
+export interface VoxRtcAudioDuckingOptions {
+  enabled?: boolean;
+  mode?: VoxRtcAudioDuckingMode;
+  threshold?: number;
+  duckVolume?: number;
+  sustainedVolume?: number;
+  sustainedAfterMs?: number;
+  localHoldMs?: number;
+  releaseDelayMs?: number;
+  pollIntervalMs?: number;
+}
+
+export type VoxRtcControlEventLike = string | {
+  type?: unknown;
+  event?: unknown;
+  data?: unknown;
+  payload?: unknown;
+  [key: string]: unknown;
+};
 
 export interface VoxRtcBrowserState {
   status: "idle" | "connecting" | "connected" | "disconnecting" | "closed";

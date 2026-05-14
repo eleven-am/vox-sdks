@@ -11,6 +11,9 @@ import type {
   VoxRtcBrowserHandler,
   VoxRtcBrowserSessionBootstrap,
   VoxRtcBrowserState,
+  VoxRtcAudioDuckingOptions,
+  VoxRtcAudioDuckingMode,
+  VoxRtcControlEventLike,
   VoxRtcClientEventEnvelope,
   VoxRtcOfferResponse,
 } from "./types.js";
@@ -18,6 +21,43 @@ import type {
 type ListenerMap = {
   [K in VoxRtcBrowserEventName]?: Set<VoxRtcBrowserHandler<K>>;
 };
+
+type NormalizedAudioDuckingConfig = {
+  mode: VoxRtcAudioDuckingMode;
+  threshold: number;
+  duckVolume: number;
+  sustainedVolume: number;
+  sustainedAfterMs: number;
+  localHoldMs: number;
+  releaseDelayMs: number;
+  pollIntervalMs: number;
+};
+
+type AudioContextConstructor = typeof AudioContext;
+
+const DEFAULT_AUDIO_DUCKING_CONFIG: NormalizedAudioDuckingConfig = {
+  mode: "vox",
+  threshold: 0.035,
+  duckVolume: 0.2,
+  sustainedVolume: 0.05,
+  sustainedAfterMs: 700,
+  localHoldMs: 500,
+  releaseDelayMs: 350,
+  pollIntervalMs: 50,
+};
+
+const DUCKING_VOX_START_EVENTS = new Set([
+  "input_audio_buffer.speech_started",
+  "interruption.detected",
+]);
+
+const DUCKING_VOX_STOP_EVENTS = new Set([
+  "input_audio_buffer.speech_stopped",
+  "interruption.false_positive",
+  "response.audio.clear",
+  "response.cancelled",
+  "response.done",
+]);
 
 function normalizeBase(base: string): string {
   return base.replace(/\/+$/, "");
@@ -93,6 +133,107 @@ function defaultFetch(...args: Parameters<typeof fetch>): ReturnType<typeof fetc
   return globalThis.fetch(...args);
 }
 
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeAudioDuckingConfig(
+  value: boolean | VoxRtcAudioDuckingOptions | undefined,
+): NormalizedAudioDuckingConfig | null {
+  if (!value) {
+    return null;
+  }
+  if (value === true) {
+    return { ...DEFAULT_AUDIO_DUCKING_CONFIG };
+  }
+  if (value.enabled === false) {
+    return null;
+  }
+  const mode = value.mode === "local" || value.mode === "hybrid" ? value.mode : "vox";
+  return {
+    mode,
+    threshold: clampNumber(value.threshold, DEFAULT_AUDIO_DUCKING_CONFIG.threshold, 0, 1),
+    duckVolume: clampNumber(value.duckVolume, DEFAULT_AUDIO_DUCKING_CONFIG.duckVolume, 0, 1),
+    sustainedVolume: clampNumber(
+      value.sustainedVolume,
+      DEFAULT_AUDIO_DUCKING_CONFIG.sustainedVolume,
+      0,
+      1,
+    ),
+    sustainedAfterMs: clampNumber(
+      value.sustainedAfterMs,
+      DEFAULT_AUDIO_DUCKING_CONFIG.sustainedAfterMs,
+      0,
+      60_000,
+    ),
+    localHoldMs: clampNumber(
+      value.localHoldMs,
+      DEFAULT_AUDIO_DUCKING_CONFIG.localHoldMs,
+      0,
+      60_000,
+    ),
+    releaseDelayMs: clampNumber(
+      value.releaseDelayMs,
+      DEFAULT_AUDIO_DUCKING_CONFIG.releaseDelayMs,
+      0,
+      60_000,
+    ),
+    pollIntervalMs: clampNumber(
+      value.pollIntervalMs,
+      DEFAULT_AUDIO_DUCKING_CONFIG.pollIntervalMs,
+      16,
+      1_000,
+    ),
+  };
+}
+
+function getAudioContextConstructor(): AudioContextConstructor | undefined {
+  return (
+    globalThis as typeof globalThis & {
+      webkitAudioContext?: AudioContextConstructor;
+    }
+  ).AudioContext ?? (
+    globalThis as typeof globalThis & {
+      webkitAudioContext?: AudioContextConstructor;
+    }
+  ).webkitAudioContext;
+}
+
+function nowMs(): number {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function eventTypeFromControlEvent(event: VoxRtcControlEventLike): string {
+  if (typeof event === "string") {
+    return event;
+  }
+  if (isRecord(event)) {
+    if (typeof event.type === "string") {
+      return event.type;
+    }
+    if (typeof event.event === "string") {
+      return event.event;
+    }
+  }
+  return "";
+}
+
+function payloadFromControlEvent(event: VoxRtcControlEventLike): Record<string, unknown> {
+  if (!isRecord(event)) {
+    return {};
+  }
+  if (isRecord(event.data)) {
+    return event.data;
+  }
+  if (isRecord(event.payload)) {
+    return event.payload;
+  }
+  return event;
+}
+
 function parseDataMessage(data: unknown): VoxRtcClientEventEnvelope | { raw: unknown } {
   if (typeof data !== "string") {
     return { raw: data };
@@ -111,6 +252,15 @@ function parseDataMessage(data: unknown): VoxRtcClientEventEnvelope | { raw: unk
   }
 }
 
+function stopStream(stream: MediaStream | null): void {
+  for (const track of stream?.getTracks() ?? []) {
+    track.onended = null;
+    track.onmute = null;
+    track.onunmute = null;
+    track.stop();
+  }
+}
+
 export class VoxRtcBrowserClient {
   readonly #fetch: typeof fetch;
   readonly #peerConnectionFactory: PeerConnectionFactory;
@@ -124,6 +274,7 @@ export class VoxRtcBrowserClient {
   readonly #autoPlayRemoteAudio: boolean;
   readonly #iceTransportPolicy?: RTCIceTransportPolicy;
   readonly #dataChannelLabel: string;
+  readonly #audioDuckingConfig: NormalizedAudioDuckingConfig | null;
   readonly #listeners: ListenerMap = {};
 
   #status: VoxRtcBrowserState["status"] = "idle";
@@ -133,9 +284,23 @@ export class VoxRtcBrowserClient {
   #peerConnection: RTCPeerConnection | null = null;
   #dataChannel: RTCDataChannel | null = null;
   #eventSource: EventSourceLike | null = null;
+  #eventSourceCleanups: Unsubscribe[] = [];
   #localStream: MediaStream | null = null;
   #remoteStream: MediaStream | null = null;
   #pendingCandidates: Array<RTCIceCandidateInit | null> = [];
+  #audioDuckingContext: AudioContext | null = null;
+  #audioDuckingSource: MediaStreamAudioSourceNode | null = null;
+  #audioDuckingAnalyser: AnalyserNode | null = null;
+  #audioDuckingBuffer: Uint8Array<ArrayBuffer> | null = null;
+  #audioDuckingTimer: ReturnType<typeof setInterval> | null = null;
+  #audioDuckingReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  #audioDuckingBaseVolume: number | null = null;
+  #audioDuckingStartedAt: number | null = null;
+  #audioDuckingLocalActive = false;
+  #audioDuckingLocalStartedAt: number | null = null;
+  #audioDuckingLocalLastVoiceAt: number | null = null;
+  #audioDuckingLocalSuppressed = false;
+  #audioDuckingVoxActive = false;
 
   constructor(options: VoxRtcBrowserClientOptions = {}) {
     this.#fetch = options.fetch ?? defaultFetch;
@@ -150,6 +315,7 @@ export class VoxRtcBrowserClient {
     this.#autoPlayRemoteAudio = options.autoPlayRemoteAudio ?? true;
     this.#iceTransportPolicy = options.iceTransportPolicy;
     this.#dataChannelLabel = options.dataChannelLabel ?? "vox-events";
+    this.#audioDuckingConfig = normalizeAudioDuckingConfig(options.audioDucking);
   }
 
   get state(): VoxRtcBrowserState {
@@ -216,6 +382,7 @@ export class VoxRtcBrowserClient {
         for (const track of localStream.getAudioTracks()) {
           pc.addTrack(track, localStream);
         }
+        this.#startLocalAudioDucking(localStream);
         this.#emit("localStream", localStream);
       }
 
@@ -276,6 +443,8 @@ export class VoxRtcBrowserClient {
     }
     this.#localStream?.getTracks().forEach((track) => track.stop());
     this.#localStream = nextStream;
+    this.#stopAudioDucking({ restoreVolume: true });
+    this.#startLocalAudioDucking(nextStream);
     this.#emit("localStream", nextStream);
     return nextStream;
   }
@@ -291,6 +460,10 @@ export class VoxRtcBrowserClient {
       event: envelope.event,
       payload: Object.prototype.hasOwnProperty.call(envelope, "payload") ? envelope.payload : null,
     }));
+  }
+
+  handleControlEvent(event: VoxRtcControlEventLike): void {
+    this.#handleAudioDuckingControlEvent(event);
   }
 
   async #resolveSession(override?: VoxRtcBrowserSessionBootstrap): Promise<VoxRtcBrowserSessionBootstrap> {
@@ -368,6 +541,7 @@ export class VoxRtcBrowserClient {
     if (!this.#httpBase) {
       throw new Error("Cannot attach RTC events without Vox HTTP base");
     }
+    this.#closeEventSource();
     const url = eventsUrl.startsWith("http") ? eventsUrl : `${this.#httpBase}${eventsUrl}`;
     const eventSource = this.#eventSourceFactory(url);
     this.#eventSource = eventSource;
@@ -375,16 +549,21 @@ export class VoxRtcBrowserClient {
     eventSource.onmessage = (event) => {
       this.#emit("sseMessage", JSON.parse(event.data) as Record<string, unknown>);
     };
-    eventSource.addEventListener("rtc.ice_candidate", (event) => {
+    const addEventSourceListener = (type: string, listener: (event: MessageEvent<string>) => void) => {
+      eventSource.addEventListener(type, listener);
+      this.#eventSourceCleanups.push(() => eventSource.removeEventListener?.(type, listener));
+    };
+
+    addEventSourceListener("rtc.ice_candidate", (event) => {
       const payload = JSON.parse(event.data) as { candidate?: RTCIceCandidateInit | null };
       const candidate = payload.candidate ?? null;
       this.#emit("serverIceCandidate", candidate);
       this.#peerConnection?.addIceCandidate(candidate).catch((error) => this.#emit("error", error));
     });
-    eventSource.addEventListener("rtc.connection_state", (event) => {
+    addEventSourceListener("rtc.connection_state", (event) => {
       this.#emit("serverConnectionState", JSON.parse(event.data) as Record<string, unknown>);
     });
-    eventSource.addEventListener("rtc.ice_connection_state", (event) => {
+    addEventSourceListener("rtc.ice_connection_state", (event) => {
       this.#emit("serverIceConnectionState", JSON.parse(event.data) as Record<string, unknown>);
     });
   }
@@ -430,23 +609,282 @@ export class VoxRtcBrowserClient {
     return response.json();
   }
 
-  #cleanup(): void {
-    this.#eventSource?.close();
+  #closeEventSource(): void {
+    const eventSource = this.#eventSource;
     this.#eventSource = null;
-    if (this.#dataChannel && this.#dataChannel.readyState !== "closed") {
-      this.#dataChannel.close();
+    for (const cleanup of this.#eventSourceCleanups.splice(0)) {
+      cleanup();
     }
+    if (eventSource) {
+      eventSource.onmessage = null;
+      eventSource.close();
+    }
+  }
+
+  #startLocalAudioDucking(stream: MediaStream): void {
+    if (!this.#audioDuckingConfig || !this.#audioElement || !this.#usesLocalAudioDucking()) {
+      return;
+    }
+    this.#stopAudioDucking({ restoreVolume: true });
+    const AudioContextClass = getAudioContextConstructor();
+    if (!AudioContextClass) {
+      this.#emit("error", new Error("Audio ducking requires AudioContext support"));
+      return;
+    }
+    try {
+      const context = new AudioContextClass();
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.2;
+      source.connect(analyser);
+      this.#audioDuckingContext = context;
+      this.#audioDuckingSource = source;
+      this.#audioDuckingAnalyser = analyser;
+      this.#audioDuckingBuffer = new Uint8Array(analyser.fftSize);
+      if (context.state === "suspended") {
+        context.resume().catch(() => {});
+      }
+      this.#audioDuckingTimer = setInterval(
+        () => this.#updateAudioDucking(),
+        this.#audioDuckingConfig.pollIntervalMs,
+      );
+    } catch (error) {
+      this.#stopAudioDucking({ restoreVolume: true });
+      this.#emit("error", error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  #stopAudioDucking({ restoreVolume }: { restoreVolume: boolean }): void {
+    if (this.#audioDuckingTimer !== null) {
+      clearInterval(this.#audioDuckingTimer);
+      this.#audioDuckingTimer = null;
+    }
+    if (this.#audioDuckingReleaseTimer !== null) {
+      clearTimeout(this.#audioDuckingReleaseTimer);
+      this.#audioDuckingReleaseTimer = null;
+    }
+    try {
+      this.#audioDuckingSource?.disconnect();
+    } catch {}
+    try {
+      this.#audioDuckingAnalyser?.disconnect();
+    } catch {}
+    this.#audioDuckingContext?.close().catch(() => {});
+    this.#audioDuckingContext = null;
+    this.#audioDuckingSource = null;
+    this.#audioDuckingAnalyser = null;
+    this.#audioDuckingBuffer = null;
+    if (restoreVolume) {
+      this.#restoreDuckedVolume();
+    } else {
+      this.#resetAudioDuckingState();
+    }
+  }
+
+  #updateAudioDucking(): void {
+    const config = this.#audioDuckingConfig;
+    const analyser = this.#audioDuckingAnalyser;
+    const buffer = this.#audioDuckingBuffer;
+    const audioElement = this.#audioElement;
+    if (!config || !analyser || !buffer || !audioElement) {
+      return;
+    }
+
+    analyser.getByteTimeDomainData(buffer);
+    let sum = 0;
+    for (const value of buffer) {
+      const centered = (value - 128) / 128;
+      sum += centered * centered;
+    }
+    const rms = Math.sqrt(sum / buffer.length);
+    const time = nowMs();
+
+    if (rms >= config.threshold) {
+      if (this.#audioDuckingLocalSuppressed && !this.#audioDuckingVoxActive) {
+        return;
+      }
+      if (!this.#audioDuckingLocalActive) {
+        this.#audioDuckingLocalActive = true;
+        this.#audioDuckingLocalStartedAt = time;
+      }
+      this.#audioDuckingLocalLastVoiceAt = time;
+      this.#beginAudioDucking();
+      if (
+        config.mode === "hybrid"
+        && !this.#audioDuckingVoxActive
+        && this.#audioDuckingLocalStartedAt !== null
+        && time - this.#audioDuckingLocalStartedAt >= config.localHoldMs
+      ) {
+        this.#audioDuckingLocalActive = false;
+        this.#audioDuckingLocalSuppressed = true;
+        this.#requestAudioDuckingRelease();
+      }
+      return;
+    }
+
+    this.#audioDuckingLocalSuppressed = false;
+    if (this.#audioDuckingLocalActive && this.#audioDuckingLocalLastVoiceAt !== null) {
+      if (time - this.#audioDuckingLocalLastVoiceAt >= config.releaseDelayMs) {
+        this.#audioDuckingLocalActive = false;
+        this.#audioDuckingLocalStartedAt = null;
+        this.#audioDuckingLocalLastVoiceAt = null;
+        this.#requestAudioDuckingRelease();
+      }
+    }
+  }
+
+  #handleAudioDuckingControlEvent(event: VoxRtcControlEventLike): void {
+    const config = this.#audioDuckingConfig;
+    if (!config || !this.#audioElement || !this.#usesVoxAudioDucking()) {
+      return;
+    }
+
+    const type = eventTypeFromControlEvent(event);
+    const payload = payloadFromControlEvent(event);
+    if (DUCKING_VOX_START_EVENTS.has(type)) {
+      this.#audioDuckingVoxActive = true;
+      this.#audioDuckingLocalSuppressed = false;
+      this.#beginAudioDucking();
+      return;
+    }
+    if (DUCKING_VOX_STOP_EVENTS.has(type)) {
+      this.#audioDuckingVoxActive = false;
+      this.#requestAudioDuckingRelease();
+      return;
+    }
+    if (type === "turn.state_changed") {
+      const state = typeof payload.state === "string" ? payload.state : "";
+      if (state === "listening" || state === "interrupted") {
+        this.#audioDuckingVoxActive = true;
+        this.#beginAudioDucking();
+      } else if (state === "idle" || state === "thinking" || state === "speaking") {
+        this.#audioDuckingVoxActive = false;
+        this.#requestAudioDuckingRelease();
+      }
+    }
+  }
+
+  #usesLocalAudioDucking(): boolean {
+    return this.#audioDuckingConfig?.mode === "local" || this.#audioDuckingConfig?.mode === "hybrid";
+  }
+
+  #usesVoxAudioDucking(): boolean {
+    return this.#audioDuckingConfig?.mode === "vox" || this.#audioDuckingConfig?.mode === "hybrid";
+  }
+
+  #beginAudioDucking(): void {
+    if (!this.#audioElement || !this.#audioDuckingConfig) {
+      return;
+    }
+    if (this.#audioDuckingReleaseTimer !== null) {
+      clearTimeout(this.#audioDuckingReleaseTimer);
+      this.#audioDuckingReleaseTimer = null;
+    }
+    if (this.#audioDuckingStartedAt === null) {
+      this.#audioDuckingStartedAt = nowMs();
+      this.#audioDuckingBaseVolume = this.#audioElement.volume;
+    }
+    const sustained = nowMs() - this.#audioDuckingStartedAt >= this.#audioDuckingConfig.sustainedAfterMs;
+    this.#setDuckedVolume(sustained ? this.#audioDuckingConfig.sustainedVolume : this.#audioDuckingConfig.duckVolume);
+  }
+
+  #requestAudioDuckingRelease(): void {
+    if (this.#audioDuckingLocalActive || this.#audioDuckingVoxActive) {
+      return;
+    }
+    const delay = this.#audioDuckingConfig?.releaseDelayMs ?? 0;
+    if (this.#audioDuckingReleaseTimer !== null) {
+      clearTimeout(this.#audioDuckingReleaseTimer);
+    }
+    if (delay <= 0) {
+      this.#restoreDuckedVolume();
+      return;
+    }
+    this.#audioDuckingReleaseTimer = setTimeout(() => {
+      this.#audioDuckingReleaseTimer = null;
+      if (!this.#audioDuckingLocalActive && !this.#audioDuckingVoxActive) {
+        this.#restoreDuckedVolume();
+      }
+    }, delay);
+  }
+
+  #setDuckedVolume(targetVolume: number): void {
+    if (!this.#audioElement) {
+      return;
+    }
+    const baseVolume = this.#audioDuckingBaseVolume ?? this.#audioElement.volume;
+    this.#audioElement.volume = Math.min(baseVolume, targetVolume);
+  }
+
+  #restoreDuckedVolume(): void {
+    if (this.#audioElement && this.#audioDuckingBaseVolume !== null) {
+      this.#audioElement.volume = this.#audioDuckingBaseVolume;
+    }
+    this.#resetAudioDuckingState();
+  }
+
+  #resetAudioDuckingState(): void {
+    this.#audioDuckingBaseVolume = null;
+    this.#audioDuckingStartedAt = null;
+    this.#audioDuckingLocalActive = false;
+    this.#audioDuckingLocalStartedAt = null;
+    this.#audioDuckingLocalLastVoiceAt = null;
+    this.#audioDuckingLocalSuppressed = false;
+    this.#audioDuckingVoxActive = false;
+  }
+
+  #cleanup(): void {
+    this.#stopAudioDucking({ restoreVolume: true });
+    this.#closeEventSource();
+
+    const dataChannel = this.#dataChannel;
     this.#dataChannel = null;
-    this.#peerConnection?.close();
+    if (dataChannel) {
+      dataChannel.onopen = null;
+      dataChannel.onclose = null;
+      dataChannel.onerror = null;
+      dataChannel.onmessage = null;
+      if (dataChannel.readyState !== "closed") {
+        dataChannel.close();
+      }
+    }
+
+    const peerConnection = this.#peerConnection;
     this.#peerConnection = null;
-    this.#localStream?.getTracks().forEach((track) => track.stop());
+    if (peerConnection) {
+      peerConnection.ontrack = null;
+      peerConnection.ondatachannel = null;
+      peerConnection.onicecandidate = null;
+      peerConnection.onconnectionstatechange = null;
+      peerConnection.oniceconnectionstatechange = null;
+      for (const sender of peerConnection.getSenders()) {
+        try {
+          peerConnection.removeTrack(sender);
+        } catch {}
+      }
+      for (const transceiver of peerConnection.getTransceivers?.() ?? []) {
+        try {
+          transceiver.stop();
+        } catch {}
+      }
+    }
+
+    stopStream(this.#localStream);
     this.#localStream = null;
+    stopStream(this.#remoteStream);
     this.#remoteStream = null;
+    peerConnection?.close();
+
+    this.#session = null;
+    this.#httpBase = null;
     this.#mediaToken = null;
     this.#pendingCandidates = [];
     if (this.#audioElement) {
       this.#audioElement.pause();
       this.#audioElement.srcObject = null;
+      this.#audioElement.removeAttribute("src");
+      this.#audioElement.load();
     }
   }
 

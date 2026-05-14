@@ -41,6 +41,85 @@ class MockDataChannel {
   }
 }
 
+class MockAudioElement {
+  volume = 0.8;
+  srcObject: unknown = null;
+  paused = false;
+  loaded = false;
+  removedAttributes: string[] = [];
+
+  play() {
+    return Promise.resolve();
+  }
+
+  pause() {
+    this.paused = true;
+  }
+
+  load() {
+    this.loaded = true;
+  }
+
+  removeAttribute(name: string) {
+    this.removedAttributes.push(name);
+  }
+}
+
+class MockAnalyser {
+  fftSize = 512;
+  smoothingTimeConstant = 0;
+  amplitude = 0;
+  disconnected = false;
+
+  getByteTimeDomainData(data: Uint8Array) {
+    data.fill(128 + this.amplitude);
+  }
+
+  disconnect() {
+    this.disconnected = true;
+  }
+}
+
+class MockAudioSource {
+  connectedTo: unknown = null;
+  disconnected = false;
+
+  connect(node: unknown) {
+    this.connectedTo = node;
+  }
+
+  disconnect() {
+    this.disconnected = true;
+  }
+}
+
+class MockAudioContext {
+  static instances: MockAudioContext[] = [];
+
+  state: AudioContextState = "running";
+  analyser = new MockAnalyser();
+  source = new MockAudioSource();
+  closed = false;
+
+  constructor() {
+    MockAudioContext.instances.push(this);
+  }
+
+  createMediaStreamSource() {
+    return this.source as unknown as MediaStreamAudioSourceNode;
+  }
+
+  createAnalyser() {
+    return this.analyser as unknown as AnalyserNode;
+  }
+
+  async resume() {}
+
+  async close() {
+    this.closed = true;
+  }
+}
+
 class MockPeerConnection {
   static instances: MockPeerConnection[] = [];
 
@@ -72,6 +151,10 @@ class MockPeerConnection {
 
   getSenders() {
     return this.senders;
+  }
+
+  removeTrack(sender: { track: { kind: string } }) {
+    this.senders = this.senders.filter((item) => item !== sender);
   }
 
   async createOffer() {
@@ -113,6 +196,10 @@ class MockEventSource implements EventSourceLike {
     this.listeners.set(type, listeners);
   }
 
+  removeEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((item) => item !== listener));
+  }
+
   close() {
     this.closed = true;
   }
@@ -130,6 +217,10 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
     status: init.status ?? 200,
     headers: { "content-type": "application/json" },
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const bootstrap: VoxRtcBrowserSessionBootstrap = {
@@ -256,6 +347,119 @@ test("sendEvent writes browser-originated event envelope to data channel", async
   });
 });
 
+test("audioDucking lowers remote audio volume while microphone is active", async () => {
+  MockPeerConnection.instances = [];
+  MockAudioContext.instances = [];
+  const previousAudioContext = (globalThis as { AudioContext?: unknown }).AudioContext;
+  (globalThis as { AudioContext?: unknown }).AudioContext = MockAudioContext;
+  try {
+    const audioElement = new MockAudioElement();
+    const client = new VoxRtcBrowserClient({
+      session: bootstrap,
+      audioElement: audioElement as unknown as HTMLAudioElement,
+      audioDucking: {
+        mode: "local",
+        threshold: 0.1,
+        duckVolume: 0.2,
+        sustainedAfterMs: 60_000,
+        releaseDelayMs: 0,
+        pollIntervalMs: 16,
+      },
+      fetch: async (url) => {
+        if (String(url).endsWith("/offer")) {
+          return jsonResponse({
+            session_id: "rtc_test",
+            media_token: "media_token",
+            type: "answer",
+            sdp: "answer-sdp",
+            events_url: "/events",
+          });
+        }
+        return jsonResponse({});
+      },
+      getUserMedia: async () => new MockMediaStream() as unknown as MediaStream,
+      peerConnectionFactory: (config) => new MockPeerConnection(config) as unknown as RTCPeerConnection,
+      eventSourceFactory: (url) => new MockEventSource(url),
+    });
+
+    await client.connect();
+    MockAudioContext.instances[0].analyser.amplitude = 64;
+    await delay(25);
+    assert.equal(audioElement.volume, 0.2);
+
+    MockAudioContext.instances[0].analyser.amplitude = 0;
+    await delay(25);
+    assert.equal(audioElement.volume, 0.8);
+
+    await client.disconnect();
+    assert.equal(MockAudioContext.instances[0].closed, true);
+    assert.equal(audioElement.volume, 0.8);
+  } finally {
+    if (previousAudioContext === undefined) {
+      delete (globalThis as { AudioContext?: unknown }).AudioContext;
+    } else {
+      (globalThis as { AudioContext?: unknown }).AudioContext = previousAudioContext;
+    }
+  }
+});
+
+test("audioDucking defaults to Vox control events instead of microphone level", async () => {
+  MockPeerConnection.instances = [];
+  MockAudioContext.instances = [];
+  const previousAudioContext = (globalThis as { AudioContext?: unknown }).AudioContext;
+  delete (globalThis as { AudioContext?: unknown }).AudioContext;
+  try {
+    const audioElement = new MockAudioElement();
+    const client = new VoxRtcBrowserClient({
+      session: bootstrap,
+      audioElement: audioElement as unknown as HTMLAudioElement,
+      audioDucking: {
+        duckVolume: 0.2,
+        releaseDelayMs: 0,
+      },
+      fetch: async (url) => {
+        if (String(url).endsWith("/offer")) {
+          return jsonResponse({
+            session_id: "rtc_test",
+            media_token: "media_token",
+            type: "answer",
+            sdp: "answer-sdp",
+            events_url: "/events",
+          });
+        }
+        return jsonResponse({});
+      },
+      getUserMedia: async () => new MockMediaStream() as unknown as MediaStream,
+      peerConnectionFactory: (config) => new MockPeerConnection(config) as unknown as RTCPeerConnection,
+      eventSourceFactory: (url) => new MockEventSource(url),
+    });
+
+    await client.connect();
+    assert.equal(MockAudioContext.instances.length, 0);
+    assert.equal(audioElement.volume, 0.8);
+
+    client.handleControlEvent({ type: "input_audio_buffer.speech_started" });
+    assert.equal(audioElement.volume, 0.2);
+
+    client.handleControlEvent({ type: "input_audio_buffer.speech_stopped" });
+    assert.equal(audioElement.volume, 0.8);
+
+    client.handleControlEvent({ type: "turn.state_changed", data: { state: "listening" } });
+    assert.equal(audioElement.volume, 0.2);
+
+    client.handleControlEvent({ type: "turn.state_changed", data: { state: "thinking" } });
+    assert.equal(audioElement.volume, 0.8);
+
+    await client.disconnect();
+  } finally {
+    if (previousAudioContext === undefined) {
+      delete (globalThis as { AudioContext?: unknown }).AudioContext;
+    } else {
+      (globalThis as { AudioContext?: unknown }).AudioContext = previousAudioContext;
+    }
+  }
+});
+
 test("disconnect tears down browser resources", async () => {
   MockPeerConnection.instances = [];
   MockEventSource.instances = [];
@@ -280,10 +484,18 @@ test("disconnect tears down browser resources", async () => {
   });
 
   await client.connect();
+  const pc = MockPeerConnection.instances[0];
+  const eventSource = MockEventSource.instances[0];
   await client.disconnect();
 
-  assert.equal(MockPeerConnection.instances[0].closed, true);
-  assert.equal(MockEventSource.instances[0].closed, true);
+  assert.equal(pc.closed, true);
+  assert.equal(pc.onicecandidate, null);
+  assert.equal(pc.ontrack, null);
+  assert.equal(pc.dataChannel.onmessage, null);
+  assert.equal(eventSource.closed, true);
+  assert.equal(eventSource.onmessage, null);
+  assert.equal(eventSource.listeners.get("rtc.ice_candidate")?.length, 0);
   assert.equal(mediaStream.stopped, true);
   assert.equal(client.state.status, "closed");
+  assert.equal(client.state.sessionId, null);
 });
