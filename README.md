@@ -19,6 +19,7 @@ Packages:
 - `typescript/vox-rtc-client`
 - `go/rtcserver`
 - `python/vox-rtc-server`
+- `rust/rtcserver`
 
 The server SDKs control RTC sessions from trusted backends. The browser client SDK joins the media path from frontend applications without holding a Vox API key.
 
@@ -36,3 +37,5 @@ Each package is versioned independently.
   - `typescript/vox-rtc-server/package.json`
 - Python package versions live in:
   - `python/vox-rtc-server/pyproject.toml`
+- Rust crate versions live in:
+  - `rust/rtcserver/Cargo.toml`

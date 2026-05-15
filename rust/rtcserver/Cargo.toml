@@ -1,0 +1,23 @@
+[package]
+name = "vox-rtc-server"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["eleven-am"]
+description = "Server-side Rust SDK for controlling Vox-hosted WebRTC sessions"
+repository = "https://github.com/eleven-am/vox-sdks"
+homepage = "https://github.com/eleven-am/vox-sdks"
+keywords = ["vox", "webrtc", "realtime", "websocket"]
+categories = ["api-bindings", "web-programming::websocket"]
+
+[dependencies]
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+futures-channel = "0.3"
