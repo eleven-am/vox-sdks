@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "eleven-am" }]
-dependencies = []
+dependencies = ["pondsocket-client==0.0.3"]
 
 [build-system]
 requires = ["hatchling"]

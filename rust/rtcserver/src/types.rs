@@ -167,29 +167,6 @@ pub struct ErrorEvent {
     pub code: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SocketEnvelope {
-    pub action: String,
-    pub event: String,
-    #[serde(default)]
-    pub payload: Value,
-    #[serde(rename = "channelName")]
-    pub channel_name: String,
-    #[serde(rename = "requestId")]
-    pub request_id: String,
-}
-
-pub(crate) fn object_to_map(value: Value) -> EventData {
-    match value {
-        Value::Object(map) => map,
-        other => {
-            let mut map = Map::new();
-            map.insert("payload".to_owned(), other);
-            map
-        }
-    }
-}
-
 pub(crate) fn optional_string(data: &EventData, key: &str) -> Option<String> {
     data.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
 }

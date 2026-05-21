@@ -1,3 +1,5 @@
+github.com/eleven-am/pondsocket/go/pondsocket-client v0.2.3 h1:HIJnk52oOlPhRopKkbSPYazx0ATqfKYiOnCzD0Lg1Xg=
+github.com/eleven-am/pondsocket/go/pondsocket-client v0.2.3/go.mod h1:NSGKt0aGz1P+Q5WEYDlR12RGqQywWhpCHxLL4eknLJQ=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=

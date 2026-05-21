@@ -26,6 +26,9 @@ pub enum VoxRtcError {
     #[error("socket is disconnected")]
     Disconnected,
 
+    #[error("PondSocket client failed: {0}")]
+    PondSocketClient(String),
+
     #[error("failed to create Vox RTC session: {status} {body}")]
     CreateSessionFailed {
         status: reqwest::StatusCode,

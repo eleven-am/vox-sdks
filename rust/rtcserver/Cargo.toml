@@ -21,3 +21,5 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 futures-channel = "0.3"
+pondsocket-client = "0.1.1"
+pondsocket-common = "0.1.1"
