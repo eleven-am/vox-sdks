@@ -29,16 +29,16 @@ type socketClient interface {
 }
 
 type Client struct {
-	httpBase            string
-	apiKey              string
-	socketBase          string
-	httpClient          *http.Client
-	socketFactory       func(endpoint string, params map[string]interface{}) (socketClient, error)
-	connectionTimeout   time.Duration
-	maxReconnectDelay   time.Duration
-	socketParams        map[string]interface{}
-	mu                  sync.Mutex
-	socket              socketClient
+	httpBase          string
+	apiKey            string
+	socketBase        string
+	httpClient        *http.Client
+	socketFactory     func(endpoint string, params map[string]interface{}) (socketClient, error)
+	connectionTimeout time.Duration
+	maxReconnectDelay time.Duration
+	socketParams      map[string]interface{}
+	mu                sync.Mutex
+	socket            socketClient
 }
 
 type ClientOptions struct {
@@ -120,6 +120,14 @@ func (c *Client) Connect(ctx context.Context) error {
 	case <-timeoutCtx.Done():
 		return fmt.Errorf("timed out waiting for PondSocket connection: %w", timeoutCtx.Err())
 	}
+}
+
+func (c *Client) OnConnectionChange(handler func(connected bool)) (func(), error) {
+	socket, err := c.ensureSocket()
+	if err != nil {
+		return nil, err
+	}
+	return socket.OnConnectionChange(handler), nil
 }
 
 func (c *Client) Disconnect() error {

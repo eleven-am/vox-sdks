@@ -11,7 +11,7 @@ use vox_rtc_server::{ResponseOptions, SessionConfig, VoxRtcServerClient};
 
 #[tokio::main]
 async fn main() -> vox_rtc_server::Result<()> {
-    let client = VoxRtcServerClient::new("https://vox.example.com");
+    let client = VoxRtcServerClient::new("https://vox.example.com")?;
     let controlled = client.create_controlled_session().await?;
 
     controlled.session.configure(SessionConfig {

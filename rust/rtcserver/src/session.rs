@@ -2,6 +2,8 @@ use crate::error::{Result, VoxRtcError};
 use crate::socket::RawSocketChannel;
 use crate::types::*;
 use serde_json::Value;
+use std::ops::ControlFlow;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
@@ -85,13 +87,17 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         Listener {
             handle: tokio::spawn(async move {
-                while let Ok((event, payload)) = messages.recv().await {
-                    handler(WireEvent {
-                        r#type: event,
-                        data: payload,
-                        session_id: session_id.clone(),
-                        channel_name: channel_name.clone(),
-                    });
+                loop {
+                    match next_message(messages.recv().await) {
+                        ControlFlow::Break(()) => break,
+                        ControlFlow::Continue(None) => continue,
+                        ControlFlow::Continue(Some((event, payload))) => handler(WireEvent {
+                            r#type: event,
+                            data: payload,
+                            session_id: session_id.clone(),
+                            channel_name: channel_name.clone(),
+                        }),
+                    }
                 }
             }),
         }
@@ -105,9 +111,15 @@ impl VoxRtcControlSession {
         let mut messages = self.channel.subscribe_messages();
         Listener {
             handle: tokio::spawn(async move {
-                while let Ok((event, payload)) = messages.recv().await {
-                    if event == event_name {
-                        handler(payload);
+                loop {
+                    match next_message(messages.recv().await) {
+                        ControlFlow::Break(()) => break,
+                        ControlFlow::Continue(None) => continue,
+                        ControlFlow::Continue(Some((event, payload))) => {
+                            if event == event_name {
+                                handler(payload);
+                            }
+                        }
                     }
                 }
             }),
@@ -179,6 +191,79 @@ impl VoxRtcControlSession {
                 channel_name: channel_name.clone(),
                 state: required_string(&payload, "state", "unknown"),
                 previous_state: optional_string(&payload, "previous_state"),
+                data: payload,
+            });
+        })
+    }
+
+    pub fn on_speech_started<F>(&self, handler: F) -> Listener
+    where
+        F: Fn(SpeechStartedEvent) + Send + Sync + 'static,
+    {
+        let session_id = self.session_id.clone();
+        let channel_name = self.channel_name.clone();
+        self.on(EVENT_SPEECH_STARTED, move |payload| {
+            handler(SpeechStartedEvent {
+                session_id: base_session_id(&payload, &session_id),
+                channel_name: channel_name.clone(),
+                timestamp_ms: optional_number(&payload, "timestamp_ms"),
+                data: payload,
+            });
+        })
+    }
+
+    pub fn on_speech_stopped<F>(&self, handler: F) -> Listener
+    where
+        F: Fn(SpeechStoppedEvent) + Send + Sync + 'static,
+    {
+        let session_id = self.session_id.clone();
+        let channel_name = self.channel_name.clone();
+        self.on(EVENT_SPEECH_STOPPED, move |payload| {
+            handler(SpeechStoppedEvent {
+                session_id: base_session_id(&payload, &session_id),
+                channel_name: channel_name.clone(),
+                timestamp_ms: optional_number(&payload, "timestamp_ms"),
+                data: payload,
+            });
+        })
+    }
+
+    pub fn on_transcript_delta<F>(&self, handler: F) -> Listener
+    where
+        F: Fn(TranscriptDeltaEvent) + Send + Sync + 'static,
+    {
+        let session_id = self.session_id.clone();
+        let channel_name = self.channel_name.clone();
+        self.on(EVENT_TRANSCRIPT_DELTA, move |payload| {
+            handler(TranscriptDeltaEvent {
+                session_id: base_session_id(&payload, &session_id),
+                channel_name: channel_name.clone(),
+                delta: required_string(&payload, "delta", ""),
+                start_ms: optional_number(&payload, "start_ms"),
+                end_ms: optional_number(&payload, "end_ms"),
+                data: payload,
+            });
+        })
+    }
+
+    pub fn on_turn_eou_predicted<F>(&self, handler: F) -> Listener
+    where
+        F: Fn(TurnEouPredictedEvent) + Send + Sync + 'static,
+    {
+        let session_id = self.session_id.clone();
+        let channel_name = self.channel_name.clone();
+        self.on(EVENT_TURN_EOU_PREDICTED, move |payload| {
+            handler(TurnEouPredictedEvent {
+                session_id: base_session_id(&payload, &session_id),
+                channel_name: channel_name.clone(),
+                probability: optional_number(&payload, "probability"),
+                threshold: optional_number(&payload, "threshold"),
+                delay_ms: optional_number(&payload, "delay_ms"),
+                start_ms: optional_number(&payload, "start_ms"),
+                end_ms: optional_number(&payload, "end_ms"),
+                decision: optional_string(&payload, "decision"),
+                action: optional_string(&payload, "action"),
+                turn_detector: optional_string(&payload, "turn_detector"),
                 data: payload,
             });
         })
@@ -386,6 +471,16 @@ impl VoxRtcControlSession {
     }
 }
 
+fn next_message(
+    result: std::result::Result<(String, EventData), RecvError>,
+) -> ControlFlow<(), Option<(String, EventData)>> {
+    match result {
+        Ok(message) => ControlFlow::Continue(Some(message)),
+        Err(RecvError::Lagged(_)) => ControlFlow::Continue(None),
+        Err(RecvError::Closed) => ControlFlow::Break(()),
+    }
+}
+
 fn insert_opt(session: &mut EventData, key: &str, value: Option<String>) {
     if let Some(value) = value {
         session.insert(key.to_owned(), Value::String(value));
@@ -412,5 +507,171 @@ fn response_event(payload: EventData, session_id: &str, channel_name: &str) -> R
         channel_name: channel_name.to_owned(),
         response_id: optional_string(&payload, "response_id"),
         data: payload,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::socket::test_channel;
+    use serde_json::json;
+    use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
+
+    async fn session() -> (
+        VoxRtcControlSession,
+        broadcast::Sender<(String, EventData)>,
+    ) {
+        let (channel, sender) = test_channel().await;
+        let session =
+            VoxRtcControlSession::new(channel, "sess-1".to_owned(), Duration::from_secs(1));
+        (session, sender)
+    }
+
+    fn payload(value: Value) -> EventData {
+        value.as_object().cloned().expect("object payload")
+    }
+
+    async fn recv<T>(rx: &mut mpsc::UnboundedReceiver<T>) -> T {
+        timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("handler fired within timeout")
+            .expect("handler produced an event")
+    }
+
+    #[test]
+    fn next_message_classifies_lag_close_and_ok() {
+        assert!(matches!(
+            next_message(Ok(("e".to_owned(), EventData::new()))),
+            ControlFlow::Continue(Some(_))
+        ));
+        assert!(matches!(
+            next_message(Err(RecvError::Lagged(7))),
+            ControlFlow::Continue(None)
+        ));
+        assert!(matches!(
+            next_message(Err(RecvError::Closed)),
+            ControlFlow::Break(())
+        ));
+    }
+
+    #[tokio::test]
+    async fn on_speech_started_fires_with_timestamp() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_speech_started(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_SPEECH_STARTED.to_owned(),
+                payload(json!({ "session_id": "sess-1", "timestamp_ms": 1234 })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.session_id, "sess-1");
+        assert_eq!(event.channel_name, "/rtc/sess-1");
+        assert_eq!(event.timestamp_ms, Some(1234.0));
+    }
+
+    #[tokio::test]
+    async fn on_speech_stopped_fires_with_timestamp() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_speech_stopped(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_SPEECH_STOPPED.to_owned(),
+                payload(json!({ "timestamp_ms": 5678 })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.timestamp_ms, Some(5678.0));
+    }
+
+    #[tokio::test]
+    async fn on_transcript_delta_fires_with_fields() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_transcript_delta(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_TRANSCRIPT_DELTA.to_owned(),
+                payload(json!({ "delta": "hel", "start_ms": 10, "end_ms": 20 })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.delta, "hel");
+        assert_eq!(event.start_ms, Some(10.0));
+        assert_eq!(event.end_ms, Some(20.0));
+    }
+
+    #[tokio::test]
+    async fn on_turn_eou_predicted_fires_with_fields() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_turn_eou_predicted(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_TURN_EOU_PREDICTED.to_owned(),
+                payload(json!({
+                    "probability": 0.82,
+                    "threshold": 0.5,
+                    "delay_ms": 120,
+                    "start_ms": 0,
+                    "end_ms": 300,
+                    "decision": "end",
+                    "action": "commit",
+                    "turn_detector": "smart"
+                })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.probability, Some(0.82));
+        assert_eq!(event.threshold, Some(0.5));
+        assert_eq!(event.delay_ms, Some(120.0));
+        assert_eq!(event.start_ms, Some(0.0));
+        assert_eq!(event.end_ms, Some(300.0));
+        assert_eq!(event.decision.as_deref(), Some("end"));
+        assert_eq!(event.action.as_deref(), Some("commit"));
+        assert_eq!(event.turn_detector.as_deref(), Some("smart"));
+    }
+
+    #[tokio::test]
+    async fn handler_survives_a_lagged_broadcast() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_speech_started(move |event| {
+            tx.send(event.timestamp_ms).unwrap();
+        });
+
+        for index in 0..2100u32 {
+            let _ = sender.send((
+                EVENT_SPEECH_STARTED.to_owned(),
+                payload(json!({ "timestamp_ms": index })),
+            ));
+        }
+        let _ = sender.send((
+            EVENT_SPEECH_STARTED.to_owned(),
+            payload(json!({ "timestamp_ms": 9999 })),
+        ));
+
+        let mut saw_final = false;
+        while let Ok(Some(value)) = timeout(Duration::from_secs(1), rx.recv()).await {
+            if value == Some(9999.0) {
+                saw_final = true;
+                break;
+            }
+        }
+        assert!(
+            saw_final,
+            "loop must keep delivering events after a broadcast lag"
+        );
     }
 }

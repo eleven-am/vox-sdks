@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.request import Request, urlopen
 
@@ -14,6 +14,7 @@ from .types import (
     SessionBootstrap,
     SocketClientFactory,
     SocketClientLike,
+    Unsubscribe,
 )
 
 
@@ -128,7 +129,26 @@ class VoxRtcServerClient:
         if self._socket is None:
             return ConnectionState.DISCONNECTED
         raw = _state_value(self._socket.get_state())
-        return ConnectionState(raw)
+        try:
+            return ConnectionState(raw)
+        except ValueError:
+            return ConnectionState.DISCONNECTED
+
+    def on_connection_change(
+        self, callback: Callable[[ConnectionState], None]
+    ) -> Unsubscribe:
+        def forward(state: Any) -> None:
+            raw = _state_value(state)
+            try:
+                resolved = ConnectionState(raw)
+            except ValueError:
+                resolved = ConnectionState.DISCONNECTED
+            callback(resolved)
+
+        return self._ensure_socket().on_connection_change(forward)
+
+    def on_error(self, callback: Callable[[BaseException], None]) -> Unsubscribe:
+        return self._ensure_socket().on_error(callback)
 
     async def connect(self) -> None:
         socket = self._ensure_socket()

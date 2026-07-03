@@ -17,7 +17,10 @@ from .types import (
     SessionAttachedEvent,
     SessionCreatedEvent,
     SocketChannelLike,
+    SpeechEvent,
+    TranscriptDeltaEvent,
     TranscriptEvent,
+    TurnEouPredictedEvent,
     TurnStateEvent,
     Unsubscribe,
     WireEvent,
@@ -35,7 +38,11 @@ EVT_RESPONSE_CREATED = "response.created"
 EVT_RESPONSE_DONE = "response.done"
 EVT_RTC_SESSION_ATTACHED = "rtc.session.attached"
 EVT_SESSION_CREATED = "session.created"
+EVT_SPEECH_STARTED = "input_audio_buffer.speech_started"
+EVT_SPEECH_STOPPED = "input_audio_buffer.speech_stopped"
 EVT_TRANSCRIPT_COMPLETED = "conversation.item.input_audio_transcription.completed"
+EVT_TRANSCRIPT_DELTA = "conversation.item.input_audio_transcription.delta"
+EVT_TURN_EOU_PREDICTED = "turn.eou.predicted"
 EVT_TURN_STATE_CHANGED = "turn.state_changed"
 
 
@@ -214,6 +221,70 @@ class VoxRtcControlSession:
             )
 
         return self.on(EVT_TURN_STATE_CHANGED, emit)
+
+    def _on_speech_event(
+        self,
+        event_name: str,
+        handler: Callable[[SpeechEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                SpeechEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    timestamp_ms=_optional_number(payload.get("timestamp_ms")),
+                )
+            )
+
+        return self.on(event_name, emit)
+
+    def on_speech_started(self, handler: Callable[[SpeechEvent], None]) -> Unsubscribe:
+        return self._on_speech_event(EVT_SPEECH_STARTED, handler)
+
+    def on_speech_stopped(self, handler: Callable[[SpeechEvent], None]) -> Unsubscribe:
+        return self._on_speech_event(EVT_SPEECH_STOPPED, handler)
+
+    def on_transcript_delta(
+        self,
+        handler: Callable[[TranscriptDeltaEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                TranscriptDeltaEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    delta=_required_str(payload.get("delta")),
+                    start_ms=_optional_number(payload.get("start_ms")),
+                    end_ms=_optional_number(payload.get("end_ms")),
+                )
+            )
+
+        return self.on(EVT_TRANSCRIPT_DELTA, emit)
+
+    def on_turn_eou_predicted(
+        self,
+        handler: Callable[[TurnEouPredictedEvent], None],
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                TurnEouPredictedEvent(
+                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    channel_name=self._channel_name,
+                    data=payload,
+                    probability=_optional_number(payload.get("probability")),
+                    threshold=_optional_number(payload.get("threshold")),
+                    delay_ms=_optional_number(payload.get("delay_ms")),
+                    start_ms=_optional_number(payload.get("start_ms")),
+                    end_ms=_optional_number(payload.get("end_ms")),
+                    decision=_optional_str(payload.get("decision")),
+                    action=_optional_str(payload.get("action")),
+                    turn_detector=_optional_str(payload.get("turn_detector")),
+                )
+            )
+
+        return self.on(EVT_TURN_EOU_PREDICTED, emit)
 
     def _on_response_event(
         self,

@@ -71,6 +71,36 @@ export interface VoxRtcTurnStateEvent {
   data: Record<string, unknown>;
 }
 
+export interface VoxRtcSpeechEvent {
+  sessionId: string;
+  channelName: string;
+  timestampMs?: number;
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcTranscriptDeltaEvent {
+  sessionId: string;
+  channelName: string;
+  delta: string;
+  startMs?: number;
+  endMs?: number;
+  data: Record<string, unknown>;
+}
+
+export interface VoxRtcTurnEouPredictedEvent {
+  sessionId: string;
+  channelName: string;
+  probability?: number;
+  threshold?: number;
+  delayMs?: number;
+  startMs?: number;
+  endMs?: number;
+  decision?: string;
+  action?: string;
+  turnDetector?: string;
+  data: Record<string, unknown>;
+}
+
 export interface VoxRtcResponseEvent {
   sessionId: string;
   channelName: string;

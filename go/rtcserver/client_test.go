@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	pondsocket "github.com/eleven-am/pondsocket/go/pondsocket-client"
 )
 
 type fakeChannel struct {
@@ -287,5 +289,157 @@ func TestNamedEventHooks(t *testing.T) {
 	}
 	if closeEvent.Reason != "data_channel_closed" || closeEvent.DataChannelState != "closed" {
 		t.Fatalf("unexpected close event: %#v", closeEvent)
+	}
+}
+
+func newAttachedSession(t *testing.T) (*fakeSocket, *ControlSession) {
+	t.Helper()
+	fake := &fakeSocket{channel: &fakeChannel{}}
+	client := NewClient(ClientOptions{
+		HTTPBase:          "https://vox.example.com",
+		ConnectionTimeout: 500 * time.Millisecond,
+	})
+	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+		return fake, nil
+	}
+	session, err := client.AttachSession(context.Background(), "rtc_123")
+	if err != nil {
+		t.Fatalf("AttachSession returned error: %v", err)
+	}
+	return fake, session
+}
+
+func TestOnSpeechStarted(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event SpeechStartedEvent
+	session.OnSpeechStarted(func(e SpeechStartedEvent) {
+		event = e
+	})
+	fake.channel.emit(EventSpeechStarted, map[string]interface{}{
+		"timestamp_ms": 1234.0,
+		"session_id":   "rtc_123",
+	})
+
+	if event.TimestampMS != 1234 {
+		t.Fatalf("unexpected timestamp: %v", event.TimestampMS)
+	}
+	if event.SessionID != "rtc_123" || event.ChannelName != "/rtc/rtc_123" {
+		t.Fatalf("unexpected metadata: %#v", event)
+	}
+}
+
+func TestOnSpeechStopped(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event SpeechStoppedEvent
+	session.OnSpeechStopped(func(e SpeechStoppedEvent) {
+		event = e
+	})
+	fake.channel.emit(EventSpeechStopped, map[string]interface{}{
+		"timestamp_ms": 5678.0,
+		"session_id":   "rtc_123",
+	})
+
+	if event.TimestampMS != 5678 {
+		t.Fatalf("unexpected timestamp: %v", event.TimestampMS)
+	}
+	if event.SessionID != "rtc_123" || event.ChannelName != "/rtc/rtc_123" {
+		t.Fatalf("unexpected metadata: %#v", event)
+	}
+}
+
+func TestOnTranscriptDelta(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event TranscriptDeltaEvent
+	session.OnTranscriptDelta(func(e TranscriptDeltaEvent) {
+		event = e
+	})
+	fake.channel.emit(EventTranscriptDelta, map[string]interface{}{
+		"delta":      "hel",
+		"start_ms":   100.0,
+		"end_ms":     200.0,
+		"session_id": "rtc_123",
+	})
+
+	if event.Delta != "hel" || event.StartMS != 100 || event.EndMS != 200 {
+		t.Fatalf("unexpected transcript delta event: %#v", event)
+	}
+	if event.SessionID != "rtc_123" || event.ChannelName != "/rtc/rtc_123" {
+		t.Fatalf("unexpected metadata: %#v", event)
+	}
+}
+
+func TestOnTurnEouPredicted(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event TurnEouPredictedEvent
+	session.OnTurnEouPredicted(func(e TurnEouPredictedEvent) {
+		event = e
+	})
+	fake.channel.emit(EventTurnEouPredicted, map[string]interface{}{
+		"probability":   0.92,
+		"threshold":     0.5,
+		"delay_ms":      320.0,
+		"start_ms":      10.0,
+		"end_ms":        50.0,
+		"decision":      "end",
+		"action":        "commit",
+		"turn_detector": "livekit",
+		"session_id":    "rtc_123",
+	})
+
+	if event.Probability != 0.92 || event.Threshold != 0.5 || event.DelayMS != 320 {
+		t.Fatalf("unexpected eou numbers: %#v", event)
+	}
+	if event.StartMS != 10 || event.EndMS != 50 {
+		t.Fatalf("unexpected eou window: %#v", event)
+	}
+	if event.Decision != "end" || event.Action != "commit" || event.TurnDetector != "livekit" {
+		t.Fatalf("unexpected eou strings: %#v", event)
+	}
+	if event.SessionID != "rtc_123" || event.ChannelName != "/rtc/rtc_123" {
+		t.Fatalf("unexpected metadata: %#v", event)
+	}
+}
+
+func TestOnConnectionChangeObservesReconnection(t *testing.T) {
+	fake := &fakeSocket{channel: &fakeChannel{}}
+	client := NewClient(ClientOptions{
+		HTTPBase:          "https://vox.example.com",
+		ConnectionTimeout: 500 * time.Millisecond,
+	})
+	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+		return fake, nil
+	}
+
+	var states []bool
+	unsub, err := client.OnConnectionChange(func(connected bool) {
+		states = append(states, connected)
+	})
+	if err != nil {
+		t.Fatalf("OnConnectionChange returned error: %v", err)
+	}
+	defer unsub()
+
+	fake.Connect()
+	fake.Disconnect()
+	fake.Connect()
+
+	if len(states) != 3 || states[0] != true || states[1] != false || states[2] != true {
+		t.Fatalf("unexpected connection states: %#v", states)
+	}
+}
+
+func TestMapChannelStateDeclined(t *testing.T) {
+	if got := mapChannelState(pondsocket.ChannelState("DECLINED")); got != channelStateDeclined {
+		t.Fatalf("expected declined mapping, got %q", got)
+	}
+	if got := mapChannelState(pondsocket.Joined); got != channelStateJoined {
+		t.Fatalf("expected joined mapping, got %q", got)
+	}
+	if got := mapChannelState(pondsocket.Closed); got != channelStateClosed {
+		t.Fatalf("expected closed mapping, got %q", got)
 	}
 }

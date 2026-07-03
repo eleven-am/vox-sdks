@@ -13,7 +13,10 @@ import type {
   VoxRtcSessionAttachedEvent,
   VoxRtcSessionConfig,
   VoxRtcSessionCreatedEvent,
+  VoxRtcSpeechEvent,
+  VoxRtcTranscriptDeltaEvent,
   VoxRtcTranscriptEvent,
+  VoxRtcTurnEouPredictedEvent,
   VoxRtcTurnStateEvent,
   VoxRtcWireEvent,
 } from "./types.js";
@@ -30,7 +33,11 @@ const EVT_RESPONSE_CREATED = "response.created";
 const EVT_RESPONSE_DONE = "response.done";
 const EVT_RTC_SESSION_ATTACHED = "rtc.session.attached";
 const EVT_SESSION_CREATED = "session.created";
+const EVT_SPEECH_STARTED = "input_audio_buffer.speech_started";
+const EVT_SPEECH_STOPPED = "input_audio_buffer.speech_stopped";
 const EVT_TRANSCRIPT_COMPLETED = "conversation.item.input_audio_transcription.completed";
+const EVT_TRANSCRIPT_DELTA = "conversation.item.input_audio_transcription.delta";
+const EVT_TURN_EOU_PREDICTED = "turn.eou.predicted";
 const EVT_TURN_STATE_CHANGED = "turn.state_changed";
 
 function toWireEvent(
@@ -104,6 +111,48 @@ function interruptionEvent(
     partialTranscript: payload.partial_transcript === null
       ? null
       : optionalString(payload.partial_transcript),
+  };
+}
+
+function speechEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  channelName: string,
+): VoxRtcSpeechEvent {
+  return {
+    ...baseEvent(payload, sessionId, channelName),
+    timestampMs: optionalNumber(payload.timestamp_ms),
+  };
+}
+
+function transcriptDeltaEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  channelName: string,
+): VoxRtcTranscriptDeltaEvent {
+  return {
+    ...baseEvent(payload, sessionId, channelName),
+    delta: requiredString(payload.delta, ""),
+    startMs: optionalNumber(payload.start_ms),
+    endMs: optionalNumber(payload.end_ms),
+  };
+}
+
+function turnEouPredictedEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  channelName: string,
+): VoxRtcTurnEouPredictedEvent {
+  return {
+    ...baseEvent(payload, sessionId, channelName),
+    probability: optionalNumber(payload.probability),
+    threshold: optionalNumber(payload.threshold),
+    delayMs: optionalNumber(payload.delay_ms),
+    startMs: optionalNumber(payload.start_ms),
+    endMs: optionalNumber(payload.end_ms),
+    decision: optionalString(payload.decision),
+    action: optionalString(payload.action),
+    turnDetector: optionalString(payload.turn_detector),
   };
 }
 
@@ -236,6 +285,30 @@ export class VoxRtcControlSession {
         state: requiredString(payload.state, "unknown"),
         previousState: optionalString(payload.previous_state),
       });
+    });
+  }
+
+  onSpeechStarted(handler: (event: VoxRtcSpeechEvent) => void): Unsubscribe {
+    return this.on(EVT_SPEECH_STARTED, (payload) => {
+      handler(speechEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onSpeechStopped(handler: (event: VoxRtcSpeechEvent) => void): Unsubscribe {
+    return this.on(EVT_SPEECH_STOPPED, (payload) => {
+      handler(speechEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onTranscriptDelta(handler: (event: VoxRtcTranscriptDeltaEvent) => void): Unsubscribe {
+    return this.on(EVT_TRANSCRIPT_DELTA, (payload) => {
+      handler(transcriptDeltaEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
+  onTurnEouPredicted(handler: (event: VoxRtcTurnEouPredictedEvent) => void): Unsubscribe {
+    return this.on(EVT_TURN_EOU_PREDICTED, (payload) => {
+      handler(turnEouPredictedEvent(payload, this.#sessionId, this.#channelName));
     });
   }
 

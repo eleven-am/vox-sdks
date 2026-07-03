@@ -14,7 +14,11 @@ const (
 	EventResponseDone              = "response.done"
 	EventRTCSessionAttached        = "rtc.session.attached"
 	EventSessionCreated            = "session.created"
+	EventSpeechStarted             = "input_audio_buffer.speech_started"
+	EventSpeechStopped             = "input_audio_buffer.speech_stopped"
 	EventTranscriptCompleted       = "conversation.item.input_audio_transcription.completed"
+	EventTranscriptDelta           = "conversation.item.input_audio_transcription.delta"
+	EventTurnEouPredicted          = "turn.eou.predicted"
 	EventTurnStateChanged          = "turn.state_changed"
 )
 
@@ -89,6 +93,43 @@ type TurnStateEvent struct {
 	Data          map[string]interface{}
 	State         string
 	PreviousState string
+}
+
+type SpeechStartedEvent struct {
+	SessionID   string
+	ChannelName string
+	Data        map[string]interface{}
+	TimestampMS float64
+}
+
+type SpeechStoppedEvent struct {
+	SessionID   string
+	ChannelName string
+	Data        map[string]interface{}
+	TimestampMS float64
+}
+
+type TranscriptDeltaEvent struct {
+	SessionID   string
+	ChannelName string
+	Data        map[string]interface{}
+	Delta       string
+	StartMS     float64
+	EndMS       float64
+}
+
+type TurnEouPredictedEvent struct {
+	SessionID    string
+	ChannelName  string
+	Data         map[string]interface{}
+	Probability  float64
+	Threshold    float64
+	DelayMS      float64
+	StartMS      float64
+	EndMS        float64
+	Decision     string
+	Action       string
+	TurnDetector string
 }
 
 type ResponseEvent struct {

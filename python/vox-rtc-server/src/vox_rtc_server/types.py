@@ -105,6 +105,39 @@ class TurnStateEvent:
 
 
 @dataclass(slots=True)
+class SpeechEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    timestamp_ms: int | float | None = None
+
+
+@dataclass(slots=True)
+class TranscriptDeltaEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    delta: str
+    start_ms: int | float | None = None
+    end_ms: int | float | None = None
+
+
+@dataclass(slots=True)
+class TurnEouPredictedEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    probability: int | float | None = None
+    threshold: int | float | None = None
+    delay_ms: int | float | None = None
+    start_ms: int | float | None = None
+    end_ms: int | float | None = None
+    decision: str | None = None
+    action: str | None = None
+    turn_detector: str | None = None
+
+
+@dataclass(slots=True)
 class ResponseEvent:
     session_id: str
     channel_name: str

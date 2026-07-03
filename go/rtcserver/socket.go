@@ -87,6 +87,8 @@ func mapChannelState(state pondsocket.ChannelState) channelState {
 		return channelStateClosed
 	case pondsocket.Idle:
 		return channelStateIdle
+	case pondsocket.ChannelState(channelStateDeclined):
+		return channelStateDeclined
 	default:
 		return channelState(state)
 	}

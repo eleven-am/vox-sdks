@@ -52,9 +52,8 @@ pub struct ControlledSession {
 }
 
 impl VoxRtcServerClient {
-    pub fn new(http_base: impl Into<String>) -> Self {
+    pub fn new(http_base: impl Into<String>) -> Result<Self> {
         Self::with_options(VoxRtcServerClientOptions::new(http_base))
-            .expect("valid Vox RTC client options")
     }
 
     pub fn with_options(mut options: VoxRtcServerClientOptions) -> Result<Self> {
@@ -78,7 +77,12 @@ impl VoxRtcServerClient {
         let http = reqwest::Client::builder()
             .timeout(options.request_timeout)
             .build()?;
-        let socket = RawSocketClient::new(&socket_base, options.socket_params.clone())?;
+        let socket = RawSocketClient::new(
+            &socket_base,
+            options.socket_params.clone(),
+            options.connection_timeout,
+            options.max_reconnect_delay,
+        )?;
         Ok(Self {
             http_base,
             api_key,
@@ -185,9 +189,27 @@ mod tests {
 
     #[test]
     fn defaults_socket_base_from_http_base() {
-        let client = VoxRtcServerClient::new("https://vox.example.com/");
+        let client = VoxRtcServerClient::new("https://vox.example.com/").unwrap();
         assert_eq!(client.http_base(), "https://vox.example.com");
         assert_eq!(client.socket_base(), "https://vox.example.com/v1/socket");
+    }
+
+    #[test]
+    fn new_returns_error_on_bad_url_instead_of_panicking() {
+        match VoxRtcServerClient::new("not a url") {
+            Err(VoxRtcError::InvalidUrl(_)) => {}
+            Err(other) => panic!("expected InvalidUrl, got {other:?}"),
+            Ok(_) => panic!("expected an error for a malformed URL"),
+        }
+    }
+
+    #[test]
+    fn forwards_connection_and_reconnect_timeouts() {
+        let mut options = VoxRtcServerClientOptions::new("https://vox.example.com");
+        options.connection_timeout = Duration::from_secs(3);
+        options.max_reconnect_delay = Duration::from_secs(45);
+        let client = VoxRtcServerClient::with_options(options).unwrap();
+        assert_eq!(client.connection_timeout, Duration::from_secs(3));
     }
 
     #[test]

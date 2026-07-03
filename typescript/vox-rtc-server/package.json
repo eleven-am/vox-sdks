@@ -13,7 +13,7 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@eleven-am/pondsocket-client": "^0.0.36"
+    "@eleven-am/pondsocket-client": "^0.0.38"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

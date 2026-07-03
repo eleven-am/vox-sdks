@@ -17,6 +17,10 @@ pub const EVENT_SESSION_CREATED: &str = "session.created";
 pub const EVENT_TRANSCRIPT_COMPLETED: &str =
     "conversation.item.input_audio_transcription.completed";
 pub const EVENT_TURN_STATE_CHANGED: &str = "turn.state_changed";
+pub const EVENT_SPEECH_STARTED: &str = "input_audio_buffer.speech_started";
+pub const EVENT_SPEECH_STOPPED: &str = "input_audio_buffer.speech_stopped";
+pub const EVENT_TRANSCRIPT_DELTA: &str = "conversation.item.input_audio_transcription.delta";
+pub const EVENT_TURN_EOU_PREDICTED: &str = "turn.eou.predicted";
 
 pub type EventData = Map<String, Value>;
 
@@ -121,6 +125,47 @@ pub struct TurnStateEvent {
     pub data: EventData,
     pub state: String,
     pub previous_state: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpeechStartedEvent {
+    pub session_id: String,
+    pub channel_name: String,
+    pub data: EventData,
+    pub timestamp_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpeechStoppedEvent {
+    pub session_id: String,
+    pub channel_name: String,
+    pub data: EventData,
+    pub timestamp_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TranscriptDeltaEvent {
+    pub session_id: String,
+    pub channel_name: String,
+    pub data: EventData,
+    pub delta: String,
+    pub start_ms: Option<f64>,
+    pub end_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TurnEouPredictedEvent {
+    pub session_id: String,
+    pub channel_name: String,
+    pub data: EventData,
+    pub probability: Option<f64>,
+    pub threshold: Option<f64>,
+    pub delay_ms: Option<f64>,
+    pub start_ms: Option<f64>,
+    pub end_ms: Option<f64>,
+    pub decision: Option<String>,
+    pub action: Option<String>,
+    pub turn_detector: Option<String>,
 }
 
 #[derive(Debug, Clone)]

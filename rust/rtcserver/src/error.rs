@@ -26,6 +26,12 @@ pub enum VoxRtcError {
     #[error("socket is disconnected")]
     Disconnected,
 
+    #[error("socket is not connected")]
+    NotConnected,
+
+    #[error("RTC control channel is closed")]
+    ChannelClosed,
+
     #[error("PondSocket client failed: {0}")]
     PondSocketClient(String),
 

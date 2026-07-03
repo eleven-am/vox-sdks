@@ -297,3 +297,118 @@ test("named event hooks map common Vox events", async () => {
     dataChannelState: "closed",
   }]);
 });
+
+async function attachedSession() {
+  const fakeSocket = new FakeSocket();
+  const client = new VoxRtcServerClient({
+    httpBase: "https://vox.example.com",
+    fetch,
+    socketFactory: () => fakeSocket as never,
+  });
+  const session = await client.attachSession("rtc_123");
+  return { fakeSocket, session };
+}
+
+test("onSpeechStarted maps the speech_started event", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: unknown[] = [];
+  const off = session.onSpeechStarted((event) => events.push(event));
+
+  fakeSocket.channel.emit("input_audio_buffer.speech_started", {
+    timestamp_ms: 1234,
+    session_id: "rtc_123",
+  });
+  off();
+
+  assert.deepEqual(events, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: { timestamp_ms: 1234, session_id: "rtc_123" },
+    timestampMs: 1234,
+  }]);
+});
+
+test("onSpeechStopped maps the speech_stopped event", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: unknown[] = [];
+  const off = session.onSpeechStopped((event) => events.push(event));
+
+  fakeSocket.channel.emit("input_audio_buffer.speech_stopped", {
+    timestamp_ms: 5678,
+    session_id: "rtc_123",
+  });
+  off();
+
+  assert.deepEqual(events, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: { timestamp_ms: 5678, session_id: "rtc_123" },
+    timestampMs: 5678,
+  }]);
+});
+
+test("onTranscriptDelta maps the transcription delta event", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: unknown[] = [];
+  const off = session.onTranscriptDelta((event) => events.push(event));
+
+  fakeSocket.channel.emit("conversation.item.input_audio_transcription.delta", {
+    delta: "hel",
+    start_ms: 10,
+    end_ms: 20,
+    session_id: "rtc_123",
+  });
+  off();
+
+  assert.deepEqual(events, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: { delta: "hel", start_ms: 10, end_ms: 20, session_id: "rtc_123" },
+    delta: "hel",
+    startMs: 10,
+    endMs: 20,
+  }]);
+});
+
+test("onTurnEouPredicted maps the eou prediction event", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: unknown[] = [];
+  const off = session.onTurnEouPredicted((event) => events.push(event));
+
+  fakeSocket.channel.emit("turn.eou.predicted", {
+    probability: 0.9,
+    threshold: 0.5,
+    delay_ms: 120,
+    start_ms: 10,
+    end_ms: 20,
+    decision: "end",
+    action: "commit",
+    turn_detector: "livekit",
+    session_id: "rtc_123",
+  });
+  off();
+
+  assert.deepEqual(events, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      probability: 0.9,
+      threshold: 0.5,
+      delay_ms: 120,
+      start_ms: 10,
+      end_ms: 20,
+      decision: "end",
+      action: "commit",
+      turn_detector: "livekit",
+      session_id: "rtc_123",
+    },
+    probability: 0.9,
+    threshold: 0.5,
+    delayMs: 120,
+    startMs: 10,
+    endMs: 20,
+    decision: "end",
+    action: "commit",
+    turnDetector: "livekit",
+  }]);
+});

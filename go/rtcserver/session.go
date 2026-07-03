@@ -133,6 +133,59 @@ func (s *ControlSession) OnTurnStateChanged(handler func(TurnStateEvent)) func()
 	})
 }
 
+func (s *ControlSession) OnSpeechStarted(handler func(SpeechStartedEvent)) func() {
+	return s.On(EventSpeechStarted, func(payload map[string]interface{}) {
+		handler(SpeechStartedEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+			TimestampMS: numberValue(payload, "timestamp_ms"),
+		})
+	})
+}
+
+func (s *ControlSession) OnSpeechStopped(handler func(SpeechStoppedEvent)) func() {
+	return s.On(EventSpeechStopped, func(payload map[string]interface{}) {
+		handler(SpeechStoppedEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+			TimestampMS: numberValue(payload, "timestamp_ms"),
+		})
+	})
+}
+
+func (s *ControlSession) OnTranscriptDelta(handler func(TranscriptDeltaEvent)) func() {
+	return s.On(EventTranscriptDelta, func(payload map[string]interface{}) {
+		handler(TranscriptDeltaEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+			Delta:       stringValue(payload, "delta", ""),
+			StartMS:     numberValue(payload, "start_ms"),
+			EndMS:       numberValue(payload, "end_ms"),
+		})
+	})
+}
+
+func (s *ControlSession) OnTurnEouPredicted(handler func(TurnEouPredictedEvent)) func() {
+	return s.On(EventTurnEouPredicted, func(payload map[string]interface{}) {
+		handler(TurnEouPredictedEvent{
+			SessionID:    eventSessionID(payload, s.sessionID),
+			ChannelName:  s.channelName,
+			Data:         payload,
+			Probability:  numberValue(payload, "probability"),
+			Threshold:    numberValue(payload, "threshold"),
+			DelayMS:      numberValue(payload, "delay_ms"),
+			StartMS:      numberValue(payload, "start_ms"),
+			EndMS:        numberValue(payload, "end_ms"),
+			Decision:     stringValue(payload, "decision", ""),
+			Action:       stringValue(payload, "action", ""),
+			TurnDetector: stringValue(payload, "turn_detector", ""),
+		})
+	})
+}
+
 func (s *ControlSession) OnResponseCreated(handler func(ResponseEvent)) func() {
 	return s.onResponseEvent(EventResponseCreated, handler)
 }

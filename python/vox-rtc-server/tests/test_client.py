@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,7 +35,7 @@ class FakeChannel:
     def leave(self) -> None:
         return None
 
-    def send_message(self, event: str, payload: dict[str, Any] | None = None) -> None:
+    def send_message(self, event: str, payload: Mapping[str, Any] | None = None) -> None:
         self.sent.append((event, dict(payload or {})))
 
     def on_message(self, callback: Callable[[FakeServerMessage], None]) -> Callable[[], None]:
@@ -81,7 +81,7 @@ class FakeSocket:
     def get_state(self) -> ConnectionState:
         return self.state
 
-    def create_channel(self, name: str, params: dict[str, Any] | None = None) -> FakeChannel:
+    def create_channel(self, name: str, params: Mapping[str, Any] | None = None) -> FakeChannel:
         assert name == "/rtc/rtc_123"
         return self.channel
 
@@ -313,3 +313,144 @@ def test_named_event_hooks_map_common_vox_events() -> None:
     assert closes[0].connection_state == "connected"
     assert closes[0].ice_connection_state == "completed"
     assert closes[0].data_channel_state == "closed"
+
+
+def test_on_speech_started_maps_typed_fields() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+
+    session = asyncio.run(client.attach_session("rtc_123"))
+    events: list[Any] = []
+    unsubscribe = session.on_speech_started(events.append)
+
+    fake_socket.channel.emit(
+        "input_audio_buffer.speech_started",
+        {"timestamp_ms": 1234, "session_id": "rtc_123"},
+    )
+    unsubscribe()
+
+    assert len(events) == 1
+    assert events[0].timestamp_ms == 1234
+    assert events[0].session_id == "rtc_123"
+    assert events[0].channel_name == "/rtc/rtc_123"
+
+
+def test_on_speech_stopped_maps_typed_fields() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+
+    session = asyncio.run(client.attach_session("rtc_123"))
+    events: list[Any] = []
+    unsubscribe = session.on_speech_stopped(events.append)
+
+    fake_socket.channel.emit(
+        "input_audio_buffer.speech_stopped",
+        {"timestamp_ms": 5678, "session_id": "rtc_123"},
+    )
+    unsubscribe()
+
+    assert len(events) == 1
+    assert events[0].timestamp_ms == 5678
+    assert events[0].channel_name == "/rtc/rtc_123"
+
+
+def test_on_transcript_delta_maps_typed_fields() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+
+    session = asyncio.run(client.attach_session("rtc_123"))
+    events: list[Any] = []
+    unsubscribe = session.on_transcript_delta(events.append)
+
+    fake_socket.channel.emit(
+        "conversation.item.input_audio_transcription.delta",
+        {"delta": "hel", "start_ms": 10, "end_ms": 20, "session_id": "rtc_123"},
+    )
+    unsubscribe()
+
+    assert len(events) == 1
+    assert events[0].delta == "hel"
+    assert events[0].start_ms == 10
+    assert events[0].end_ms == 20
+    assert events[0].session_id == "rtc_123"
+
+
+def test_on_turn_eou_predicted_maps_typed_fields() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+
+    session = asyncio.run(client.attach_session("rtc_123"))
+    events: list[Any] = []
+    unsubscribe = session.on_turn_eou_predicted(events.append)
+
+    fake_socket.channel.emit(
+        "turn.eou.predicted",
+        {
+            "probability": 0.82,
+            "threshold": 0.5,
+            "delay_ms": 240,
+            "start_ms": 100,
+            "end_ms": 900,
+            "decision": "end_of_turn",
+            "action": "commit",
+            "turn_detector": "livekit",
+            "session_id": "rtc_123",
+        },
+    )
+    unsubscribe()
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.probability == 0.82
+    assert event.threshold == 0.5
+    assert event.delay_ms == 240
+    assert event.start_ms == 100
+    assert event.end_ms == 900
+    assert event.decision == "end_of_turn"
+    assert event.action == "commit"
+    assert event.turn_detector == "livekit"
+    assert event.channel_name == "/rtc/rtc_123"
+
+
+def test_on_connection_change_forwards_socket_state() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+
+    states: list[ConnectionState] = []
+    client.on_connection_change(states.append)
+
+    asyncio.run(client.connect())
+
+    assert ConnectionState.CONNECTED in states
+    assert client.connection_state == ConnectionState.CONNECTED
+
+
+def test_connection_state_tolerates_unknown_socket_state() -> None:
+    class WeirdSocket(FakeSocket):
+        def get_state(self) -> Any:
+            return "reconnecting"
+
+    fake_socket = WeirdSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+
+    asyncio.run(client.attach_session("rtc_123"))
+
+    assert client.connection_state == ConnectionState.DISCONNECTED
