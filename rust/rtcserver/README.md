@@ -39,3 +39,7 @@ async fn main() -> vox_rtc_server::Result<()> {
 If Vox requires `VOX_API_KEY`, pass it in `VoxRtcServerClientOptions` or set the
 `VOX_API_KEY` environment variable. The key is used for both HTTP session
 creation and the PondSocket control connection.
+
+Set `join_timeout` in `VoxRtcServerClientOptions` for the client default. Use
+`attach_session_with_options` or `create_controlled_session_with_options` with
+`SessionOptions` to override it for one session.

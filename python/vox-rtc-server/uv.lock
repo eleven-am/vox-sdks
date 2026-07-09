@@ -13,27 +13,27 @@ wheels = [
 
 [[package]]
 name = "pondsocket-client"
-version = "0.0.5"
+version = "0.0.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pondsocket-common" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8d/3d/571896f4df3e5f858afd5e320bda5b94177ada3060ed88ab289792833b87/pondsocket_client-0.0.5.tar.gz", hash = "sha256:3b45fd03912d7c4cc082c77408da92ab46095fa627ed4f575c5ed06a98d84f79", size = 11849, upload-time = "2026-07-03T08:25:28.543Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/55/c7a567c0dc93a0ac9855788eb993a7c62c51648f02321ab84bf1f0c708e2/pondsocket_client-0.0.6.tar.gz", hash = "sha256:42c123c219e2cd978d30c196dcecd309dc05e0b3b0e4d79040b3e76c66fb0a9d", size = 12991, upload-time = "2026-07-09T22:04:20.717Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b3/ac/f2e0f4f9bb3fce2dd6a1ec13fbd4d6338f871226633744b7048ea8f55ae6/pondsocket_client-0.0.5-py3-none-any.whl", hash = "sha256:ef451cd20bb1253cf700b2389c4242d2efda9b89565667b66d662b999ee0c9df", size = 11322, upload-time = "2026-07-03T08:25:27.637Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/c6/019ab0312deacf3e6246b04974e54109184a6ace9de37489a547856ce829/pondsocket_client-0.0.6-py3-none-any.whl", hash = "sha256:1e793d9a5a9b39e76c90643095f7f36d9b1d063b45ccebc25282107157c39c03", size = 11406, upload-time = "2026-07-09T22:04:19.457Z" },
 ]
 
 [[package]]
 name = "pondsocket-common"
-version = "0.0.5"
+version = "0.0.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/47/a5a33983febe538c0dfbc1fab99008b7ed723d1d3dc9639dc162e89a42a5/pondsocket_common-0.0.5.tar.gz", hash = "sha256:9cb0e17dec373e6c24503b39b6997cfbbca92dfee157ac0ecac168551ab5bdbb", size = 12087, upload-time = "2026-07-03T08:25:05.09Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3e/20/bd616f5a2818cbb364cb023eb6bbd97f89ebf2d390645d74ad536e7966a8/pondsocket_common-0.0.6.tar.gz", hash = "sha256:b257b8d109787baf076029c979df4e47d9c97db55270ecf2e0757e8fc4840459", size = 12110, upload-time = "2026-07-09T22:03:50.371Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/b7/6e5ac12ee9233e1a36877fd46b4dd65709c231b348c0c17c2643be31f53a/pondsocket_common-0.0.5-py3-none-any.whl", hash = "sha256:b7d0935247c168144eb51ff4196abfdd01f05bd37db26bcbd09ba660ec1ddeb3", size = 10520, upload-time = "2026-07-03T08:25:04.045Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/e4/a460a3a827cd90e63ef99c0ac0ae9437a3895b69da1b71223edb5c7a2d78/pondsocket_common-0.0.6-py3-none-any.whl", hash = "sha256:559a868042017faf23959298041fb22291f19b5c4456090b09b309fc26c151a4", size = 10523, upload-time = "2026-07-09T22:03:49.38Z" },
 ]
 
 [[package]]
@@ -176,14 +176,14 @@ wheels = [
 
 [[package]]
 name = "vox-rtc-server"
-version = "0.1.5"
+version = "0.1.7"
 source = { editable = "." }
 dependencies = [
     { name = "pondsocket-client" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pondsocket-client", specifier = "==0.0.5" }]
+requires-dist = [{ name = "pondsocket-client", specifier = "==0.0.6" }]
 
 [[package]]
 name = "websockets"

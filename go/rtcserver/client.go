@@ -35,6 +35,7 @@ type Client struct {
 	httpClient        *http.Client
 	socketFactory     func(endpoint string, params map[string]interface{}) (socketClient, error)
 	connectionTimeout time.Duration
+	joinTimeout       time.Duration
 	maxReconnectDelay time.Duration
 	socketParams      map[string]interface{}
 	mu                sync.Mutex
@@ -47,6 +48,7 @@ type ClientOptions struct {
 	SocketBase        string
 	HTTPClient        *http.Client
 	ConnectionTimeout time.Duration
+	JoinTimeout       time.Duration
 	MaxReconnectDelay time.Duration
 	SocketParams      map[string]interface{}
 }
@@ -79,6 +81,7 @@ func NewClient(options ClientOptions) *Client {
 		socketBase:        strings.TrimRight(socketBase, "/"),
 		httpClient:        httpClient,
 		connectionTimeout: valueOrDefaultDuration(options.ConnectionTimeout, 10*time.Second),
+		joinTimeout:       valueOrDefaultDuration(options.JoinTimeout, 10*time.Second),
 		maxReconnectDelay: valueOrDefaultDuration(options.MaxReconnectDelay, 30*time.Second),
 		socketParams:      socketParams,
 		socketFactory: func(endpoint string, params map[string]interface{}) (socketClient, error) {
@@ -170,7 +173,7 @@ func (c *Client) CreateSession(ctx context.Context) (*SessionBootstrap, error) {
 	return &bootstrap, nil
 }
 
-func (c *Client) AttachSession(ctx context.Context, sessionID string) (*ControlSession, error) {
+func (c *Client) AttachSession(ctx context.Context, sessionID string, options ...SessionOptions) (*ControlSession, error) {
 	if err := c.Connect(ctx); err != nil {
 		return nil, err
 	}
@@ -180,19 +183,23 @@ func (c *Client) AttachSession(ctx context.Context, sessionID string) (*ControlS
 		return nil, err
 	}
 	channel := socket.CreateChannel("/rtc/"+sessionID, map[string]interface{}{})
-	session := newControlSession(channel, sessionID, c.connectionTimeout)
+	joinTimeout := c.joinTimeout
+	if len(options) > 0 {
+		joinTimeout = valueOrDefaultDuration(options[0].JoinTimeout, joinTimeout)
+	}
+	session := newControlSession(channel, sessionID, joinTimeout)
 	if err := session.Join(ctx); err != nil {
 		return nil, err
 	}
 	return session, nil
 }
 
-func (c *Client) CreateControlledSession(ctx context.Context) (*SessionBootstrap, *ControlSession, error) {
+func (c *Client) CreateControlledSession(ctx context.Context, options ...SessionOptions) (*SessionBootstrap, *ControlSession, error) {
 	bootstrap, err := c.CreateSession(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	session, err := c.AttachSession(ctx, bootstrap.SessionID)
+	session, err := c.AttachSession(ctx, bootstrap.SessionID, options...)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -5,11 +5,15 @@ import { ChannelState, ConnectionState, VoxRtcServerClient } from "../src/index.
 
 class FakeChannel {
   sent: Array<{ event: string; payload: Record<string, unknown> }> = [];
+  state = ChannelState.IDLE;
+  joinCalls = 0;
+  joinError: { message: string } | null = null;
   stateHandlers = new Set<(state: ChannelState) => void>();
   messageHandlers = new Set<(event: string, payload: Record<string, unknown>) => void>();
 
   join() {
-    for (const handler of this.stateHandlers) handler(ChannelState.JOINED);
+    this.joinCalls += 1;
+    this.setState(ChannelState.JOINED);
   }
 
   leave() {}
@@ -25,7 +29,13 @@ class FakeChannel {
 
   onChannelStateChange(callback: (state: ChannelState) => void) {
     this.stateHandlers.add(callback);
+    callback(this.state);
     return () => this.stateHandlers.delete(callback);
+  }
+
+  setState(state: ChannelState) {
+    this.state = state;
+    for (const handler of this.stateHandlers) handler(state);
   }
 
   emit(event: string, payload: Record<string, unknown>) {
@@ -109,12 +119,15 @@ test("createSession parses the RTC bootstrap response", async () => {
 test("attachSession joins the RTC channel and sends the expected control messages", async () => {
   const fakeSocket = new FakeSocket();
   let receivedParams: Record<string, unknown> | null = null;
+  let receivedOptions: Record<string, unknown> | null = null;
   const client = new VoxRtcServerClient({
     httpBase: "https://vox.example.com",
     fetch,
     apiKey: "secret",
-    socketFactory: (_endpoint, params) => {
+    joinTimeoutMs: 12_345,
+    socketFactory: (_endpoint, params, options) => {
       receivedParams = params;
+      receivedOptions = options;
       return fakeSocket as never;
     },
   });
@@ -148,6 +161,46 @@ test("attachSession joins the RTC channel and sends the expected control message
   });
   assert.deepEqual(fakeSocket.channel.sent[1]?.payload, { text: "Hello" });
   assert.deepEqual(receivedParams, { api_key: "secret" });
+  assert.deepEqual(receivedOptions, {
+    connectionTimeout: 10_000,
+    joinTimeout: 12_345,
+    maxReconnectDelay: 30_000,
+  });
+});
+
+test("attachSession accepts an already joined channel without joining it again", async () => {
+  const fakeSocket = new FakeSocket();
+  fakeSocket.channel.state = ChannelState.JOINED;
+  const client = new VoxRtcServerClient({
+    httpBase: "https://vox.example.com",
+    fetch,
+    socketFactory: () => fakeSocket as never,
+  });
+
+  await client.attachSession("rtc_123");
+
+  assert.equal(fakeSocket.channel.joinCalls, 0);
+  assert.equal(fakeSocket.channel.stateHandlers.size, 0);
+});
+
+test("attachSession includes the PondSocket decline reason", async () => {
+  const fakeSocket = new FakeSocket();
+  fakeSocket.channel.join = () => {
+    fakeSocket.channel.joinCalls += 1;
+    fakeSocket.channel.joinError = { message: "unknown or expired RTC session" };
+    fakeSocket.channel.setState(ChannelState.DECLINED);
+  };
+  const client = new VoxRtcServerClient({
+    httpBase: "https://vox.example.com",
+    fetch,
+    socketFactory: () => fakeSocket as never,
+  });
+
+  await assert.rejects(
+    client.attachSession("rtc_123"),
+    /DECLINED: unknown or expired RTC session/,
+  );
+  assert.equal(fakeSocket.channel.stateHandlers.size, 0);
 });
 
 test("onEvent maps PondSocket messages into Vox wire events", async () => {

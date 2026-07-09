@@ -50,12 +50,16 @@ The underlying PondSocket client owns socket-level reconnection with a
   distinguish `NotConnected`/`ChannelClosed` in error mapping instead of collapsing.
   Add real tests (crate currently has ~2).
 - **Python**: add `[tool.pytest.ini_options]` with `pythonpath = ["src"]` so
-  `uv run pytest` works on a clean checkout. Bump `pondsocket-client` `==0.0.3` →
-  `==0.0.5`. Guard `connection_state` against socket states outside its 3-value enum.
-- **TypeScript**: bump `@eleven-am/pondsocket-client` `^0.0.36` → `^0.0.38`.
+  `uv run pytest` works on a clean checkout. Require `pondsocket-client==0.0.6`.
+  Guard `connection_state` against socket states outside its 3-value enum.
+- **TypeScript**: use `@eleven-am/pondsocket-client==0.0.39`, forward its
+  channel join timeout, and preserve structured join-decline messages.
 - **Go**: fix the `channelStateDeclined` mapping gap (join-declined detection must not
-  rely on a raw string coincidence). Go's pondsocket-client module is unchanged
-  (`v0.2.3`), no version bump.
+  rely on a raw string coincidence). Use `pondsocket-client v0.2.4` for the corrected
+  join, decline, queue, and reconnect lifecycle.
+- **Rust**: use `pondsocket-client 0.1.5` with `pondsocket-common 0.1.4`. Keep the
+  public WebSocket error type aligned with PondSocket's `tokio-tungstenite 0.29`
+  dependency so the SDK does not compile two WebSocket stacks.
 
 ## Green bars
 - Go: `go build ./... && go vet ./... && go test ./...`

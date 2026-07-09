@@ -319,7 +319,10 @@ mod tests {
         let (channel, _sender) = test_channel().await;
         channel.leave().await.expect("first leave closes channel");
         assert!(matches!(
-            channel.join().await.expect_err("cannot join a closed channel"),
+            channel
+                .join()
+                .await
+                .expect_err("cannot join a closed channel"),
             VoxRtcError::ChannelClosed
         ));
         assert!(matches!(

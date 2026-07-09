@@ -121,6 +121,7 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 		HTTPBase:          "https://vox.example.com",
 		APIKey:            "secret",
 		ConnectionTimeout: 500 * time.Millisecond,
+		JoinTimeout:       750 * time.Millisecond,
 	})
 	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
 		if params["api_key"] != "secret" {
@@ -129,9 +130,16 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 		return fake, nil
 	}
 
-	session, err := client.AttachSession(context.Background(), "rtc_123")
+	session, err := client.AttachSession(
+		context.Background(),
+		"rtc_123",
+		SessionOptions{JoinTimeout: 250 * time.Millisecond},
+	)
 	if err != nil {
 		t.Fatalf("AttachSession returned error: %v", err)
+	}
+	if session.joinTimeout != 250*time.Millisecond {
+		t.Fatalf("unexpected join timeout: %s", session.joinTimeout)
 	}
 
 	session.Configure(SessionConfig{

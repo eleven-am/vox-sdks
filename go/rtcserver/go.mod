@@ -2,8 +2,9 @@ module github.com/eleven-am/vox-sdks/go/rtcserver
 
 go 1.25.2
 
+require github.com/eleven-am/pondsocket/go/pondsocket-client v0.2.4
+
 require (
-	github.com/eleven-am/pondsocket/go/pondsocket-client v0.2.3
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 )

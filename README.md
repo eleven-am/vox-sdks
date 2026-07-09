@@ -32,7 +32,7 @@ Examples:
 Each package is versioned independently.
 
 - Go module tags should use the module subdirectory prefix, for example:
-  - `go/rtcserver/v0.1.5`
+  - `go/rtcserver/v0.1.7`
 - TypeScript package versions live in:
   - `typescript/vox-rtc-server/package.json`
 - Python package versions live in:

@@ -31,7 +31,8 @@ import { VoxRtcServerClient } from "@eleven-am/vox-rtc-server";
 
 const client = new VoxRtcServerClient({
   httpBase: "https://vox.example.com",
-  apiKey: process.env.VOX_API_KEY
+  apiKey: process.env.VOX_API_KEY,
+  joinTimeoutMs: 10_000
 });
 
 await client.connect();
@@ -69,3 +70,7 @@ rtc.sendClientEvent({
 ```
 
 `sendClientEvent` is server to browser. Browser-originated app events arrive through `onBrowserEvent`.
+
+`joinTimeoutMs` sets the default control-channel join timeout. Pass
+`{ joinTimeoutMs }` to `attachSession` or `createControlledSession` to override it
+for one session.

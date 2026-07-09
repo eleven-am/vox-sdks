@@ -21,14 +21,16 @@ import (
 	"context"
 	"log"
 	"os"
+	"time"
 
 	"github.com/eleven-am/vox-sdks/go/rtcserver"
 )
 
 func main() {
 	client := rtcserver.NewClient(rtcserver.ClientOptions{
-		HTTPBase: "https://vox.example.com",
-		APIKey:   os.Getenv("VOX_API_KEY"),
+		HTTPBase:   "https://vox.example.com",
+		APIKey:     os.Getenv("VOX_API_KEY"),
+		JoinTimeout: 10 * time.Second,
 	})
 
 	ctx := context.Background()
@@ -71,3 +73,6 @@ func main() {
 
 If `APIKey` is omitted, the client falls back to `VOX_API_KEY`.
 `SendClientEvent` is server to browser. Browser-originated app events arrive through `OnBrowserEvent`.
+
+Pass `rtcserver.SessionOptions{JoinTimeout: ...}` to `AttachSession` or
+`CreateControlledSession` to override the client default for one session.

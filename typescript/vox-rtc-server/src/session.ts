@@ -204,23 +204,34 @@ export class VoxRtcControlSession {
   join(): Promise<void> {
     return new Promise((resolve, reject) => {
       let done = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let offState: Unsubscribe = () => {};
       const finish = (fn: () => void) => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        if (timer !== undefined) clearTimeout(timer);
         offState();
         fn();
       };
 
-      const offState = this.#channel.onChannelStateChange((state) => {
+      const unsubscribe = this.#channel.onChannelStateChange((state) => {
         if (state === ChannelState.JOINED) {
           finish(resolve);
         } else if (state === ChannelState.DECLINED || state === ChannelState.CLOSED) {
-          finish(() => reject(new Error(`RTC channel join failed for ${this.#channelName}: ${state}`)));
+          const reason = this.#channel.joinError?.message;
+          const suffix = reason ? `: ${reason}` : "";
+          finish(() => reject(new Error(
+            `RTC channel join failed for ${this.#channelName}: ${state}${suffix}`,
+          )));
         }
       });
+      offState = unsubscribe;
+      if (done) {
+        offState();
+        return;
+      }
 
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         finish(() => reject(new Error(`RTC channel join timed out for ${this.#channelName}`)));
       }, this.#joinTimeoutMs);
 

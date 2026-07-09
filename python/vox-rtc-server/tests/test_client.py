@@ -153,7 +153,8 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
         socket_factory=lambda _endpoint, params, *_args: captured_params.update(params) or fake_socket,
     )
 
-    session = asyncio.run(client.attach_session("rtc_123"))
+    session = asyncio.run(client.attach_session("rtc_123", join_timeout=2.5))
+    assert session._join_timeout == 2.5
     session.configure(
         SessionConfig(
             stt_model="stt",

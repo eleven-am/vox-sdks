@@ -51,6 +51,11 @@ pub struct ControlledSession {
     pub session: VoxRtcControlSession,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionOptions {
+    pub join_timeout: Option<Duration>,
+}
+
 impl VoxRtcServerClient {
     pub fn new(http_base: impl Into<String>) -> Result<Self> {
         Self::with_options(VoxRtcServerClientOptions::new(http_base))
@@ -152,26 +157,50 @@ impl VoxRtcServerClient {
         &self,
         session_id: impl Into<String>,
     ) -> Result<VoxRtcControlSession> {
+        self.attach_session_with_options(session_id, SessionOptions::default())
+            .await
+    }
+
+    pub async fn attach_session_with_options(
+        &self,
+        session_id: impl Into<String>,
+        options: SessionOptions,
+    ) -> Result<VoxRtcControlSession> {
         let session_id = session_id.into();
         self.connect().await?;
         let channel = self
             .socket
             .create_channel(format!("/rtc/{session_id}"), EventData::new())
             .await;
-        let session = VoxRtcControlSession::new(channel, session_id, self.join_timeout);
+        let session =
+            VoxRtcControlSession::new(channel, session_id, self.resolve_join_timeout(options));
         session.join().await?;
         Ok(session)
     }
 
     pub async fn create_controlled_session(&self) -> Result<ControlledSession> {
+        self.create_controlled_session_with_options(SessionOptions::default())
+            .await
+    }
+
+    pub async fn create_controlled_session_with_options(
+        &self,
+        options: SessionOptions,
+    ) -> Result<ControlledSession> {
         let bootstrap = self.create_session().await?;
-        let session = self.attach_session(bootstrap.session_id.clone()).await?;
+        let session = self
+            .attach_session_with_options(bootstrap.session_id.clone(), options)
+            .await?;
         Ok(ControlledSession { bootstrap, session })
     }
 
     #[allow(dead_code)]
     pub fn socket_params(&self) -> &EventData {
         &self.socket_params
+    }
+
+    fn resolve_join_timeout(&self, options: SessionOptions) -> Duration {
+        options.join_timeout.unwrap_or(self.join_timeout)
     }
 }
 
@@ -210,6 +239,24 @@ mod tests {
         options.max_reconnect_delay = Duration::from_secs(45);
         let client = VoxRtcServerClient::with_options(options).unwrap();
         assert_eq!(client.connection_timeout, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn session_options_override_the_client_join_timeout() {
+        let mut options = VoxRtcServerClientOptions::new("https://vox.example.com");
+        options.join_timeout = Duration::from_secs(12);
+        let client = VoxRtcServerClient::with_options(options).unwrap();
+
+        assert_eq!(
+            client.resolve_join_timeout(SessionOptions {
+                join_timeout: Some(Duration::from_secs(2)),
+            }),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            client.resolve_join_timeout(SessionOptions::default()),
+            Duration::from_secs(12)
+        );
     }
 
     #[test]

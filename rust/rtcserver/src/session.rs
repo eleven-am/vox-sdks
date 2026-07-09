@@ -518,10 +518,7 @@ mod tests {
     use tokio::sync::broadcast;
     use tokio::sync::mpsc;
 
-    async fn session() -> (
-        VoxRtcControlSession,
-        broadcast::Sender<(String, EventData)>,
-    ) {
+    async fn session() -> (VoxRtcControlSession, broadcast::Sender<(String, EventData)>) {
         let (channel, sender) = test_channel().await;
         let session =
             VoxRtcControlSession::new(channel, "sess-1".to_owned(), Duration::from_secs(1));

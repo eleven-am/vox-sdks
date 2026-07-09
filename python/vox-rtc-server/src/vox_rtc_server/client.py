@@ -166,23 +166,33 @@ class VoxRtcServerClient:
     async def create_session(self) -> SessionBootstrap:
         return await asyncio.to_thread(self._create_session_blocking)
 
-    async def attach_session(self, session_id: str) -> VoxRtcControlSession:
+    async def attach_session(
+        self,
+        session_id: str,
+        *,
+        join_timeout: float | None = None,
+    ) -> VoxRtcControlSession:
         await self.connect()
         socket = self._ensure_socket()
         channel = socket.create_channel(f"/rtc/{session_id}", {})
         session = VoxRtcControlSession(
             channel,
             session_id,
-            join_timeout=self._join_timeout,
+            join_timeout=self._join_timeout if join_timeout is None else join_timeout,
         )
         await session.join()
         return session
 
     async def create_controlled_session(
         self,
+        *,
+        join_timeout: float | None = None,
     ) -> tuple[SessionBootstrap, VoxRtcControlSession]:
         bootstrap = await self.create_session()
-        session = await self.attach_session(bootstrap.session_id)
+        session = await self.attach_session(
+            bootstrap.session_id,
+            join_timeout=join_timeout,
+        )
         return bootstrap, session
 
     def _ensure_socket(self) -> SocketClientLike:

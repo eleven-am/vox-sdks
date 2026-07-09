@@ -7,6 +7,7 @@ import type {
   Unsubscribe,
   VoxRtcServerClientOptions,
   VoxRtcSessionBootstrap,
+  VoxRtcSessionOptions,
 } from "./types.js";
 
 function normalizeBase(base: string): string {
@@ -38,7 +39,7 @@ function toBootstrap(data: Record<string, unknown>): VoxRtcSessionBootstrap {
 function defaultSocketFactory(
   endpoint: string,
   params: Record<string, unknown>,
-  options: { connectionTimeout?: number; maxReconnectDelay?: number },
+  options: { connectionTimeout?: number; joinTimeout?: number; maxReconnectDelay?: number },
 ): SocketClientLike {
   return new PondClient(endpoint, params, options);
 }
@@ -55,6 +56,7 @@ export class VoxRtcServerClient {
   readonly #socketParams: Record<string, unknown>;
   readonly #socketFactory: SocketClientFactory;
   readonly #connectionTimeoutMs: number;
+  readonly #joinTimeoutMs: number;
   readonly #maxReconnectDelayMs: number;
 
   #socket: SocketClientLike | null = null;
@@ -68,6 +70,7 @@ export class VoxRtcServerClient {
     this.#socketParams = options.socketParams ?? {};
     this.#socketFactory = options.socketFactory ?? defaultSocketFactory;
     this.#connectionTimeoutMs = options.connectionTimeoutMs ?? 10_000;
+    this.#joinTimeoutMs = options.joinTimeoutMs ?? 10_000;
     this.#maxReconnectDelayMs = options.maxReconnectDelayMs ?? 30_000;
   }
 
@@ -147,17 +150,24 @@ export class VoxRtcServerClient {
     return toBootstrap(await response.json() as Record<string, unknown>);
   }
 
-  async attachSession(sessionId: string, options?: { joinTimeoutMs?: number }): Promise<VoxRtcControlSession> {
+  async attachSession(
+    sessionId: string,
+    options?: VoxRtcSessionOptions,
+  ): Promise<VoxRtcControlSession> {
     await this.connect();
     const socket = this.#ensureSocket();
     const channel = socket.createChannel(`/rtc/${sessionId}`, {});
-    const session = new VoxRtcControlSession(channel, sessionId, options?.joinTimeoutMs ?? 10_000);
+    const session = new VoxRtcControlSession(
+      channel,
+      sessionId,
+      options?.joinTimeoutMs ?? this.#joinTimeoutMs,
+    );
 
     await session.join();
     return session;
   }
 
-  async createControlledSession(options?: { joinTimeoutMs?: number }): Promise<{
+  async createControlledSession(options?: VoxRtcSessionOptions): Promise<{
     bootstrap: VoxRtcSessionBootstrap;
     session: VoxRtcControlSession;
   }> {
@@ -174,6 +184,7 @@ export class VoxRtcServerClient {
       }
       this.#socket = this.#socketFactory(this.#socketBase, params, {
         connectionTimeout: this.#connectionTimeoutMs,
+        joinTimeout: this.#joinTimeoutMs,
         maxReconnectDelay: this.#maxReconnectDelayMs,
       });
     }

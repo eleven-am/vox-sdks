@@ -143,6 +143,10 @@ export interface VoxRtcResponseOptions {
   allowInterruptions?: boolean;
 }
 
+export interface VoxRtcSessionOptions {
+  joinTimeoutMs?: number;
+}
+
 export type Unsubscribe = () => void;
 
 export interface VoxRtcServerClientOptions {
@@ -152,6 +156,7 @@ export interface VoxRtcServerClientOptions {
   socketParams?: Record<string, unknown>;
   fetch?: typeof fetch;
   connectionTimeoutMs?: number;
+  joinTimeoutMs?: number;
   maxReconnectDelayMs?: number;
   socketFactory?: SocketClientFactory;
 }
@@ -166,6 +171,12 @@ export interface SocketClientLike {
 }
 
 export interface SocketChannelLike {
+  readonly joinError?: {
+    code?: string;
+    message?: string;
+    status?: number;
+    details?: unknown;
+  } | null;
   join(): void;
   leave(): void;
   sendMessage(event: string, payload: Record<string, unknown>): void;
@@ -177,6 +188,6 @@ export interface SocketClientFactory {
   (
     endpoint: string,
     params: Record<string, unknown>,
-    options: { connectionTimeout?: number; maxReconnectDelay?: number }
+    options: { connectionTimeout?: number; joinTimeout?: number; maxReconnectDelay?: number }
   ): SocketClientLike;
 }

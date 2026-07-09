@@ -1,5 +1,7 @@
 package rtcserver
 
+import "time"
+
 const (
 	EventClientEvent               = "client.event"
 	EventBrowserEvent              = "browser.event"
@@ -44,6 +46,10 @@ type SessionConfig struct {
 	VADBackend   string                 `json:"-"`
 	TurnDetector string                 `json:"-"`
 	Extra        map[string]interface{} `json:"-"`
+}
+
+type SessionOptions struct {
+	JoinTimeout time.Duration
 }
 
 type ResponseOptions struct {

@@ -71,3 +71,7 @@ asyncio.run(main())
 ```
 
 `send_client_event` is server to browser. Browser-originated app events arrive through `on_browser_event`.
+
+Set `join_timeout` on `VoxRtcServerClient` for the default control-channel join
+timeout. Pass `join_timeout=...` to `attach_session` or
+`create_controlled_session` to override it for one session.
