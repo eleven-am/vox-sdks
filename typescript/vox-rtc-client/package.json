@@ -3,6 +3,11 @@
   "version": "0.1.3",
   "description": "Browser-side SDK for Vox-hosted WebRTC media sessions",
   "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eleven-am/vox-sdks.git",
+    "directory": "typescript/vox-rtc-client"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
