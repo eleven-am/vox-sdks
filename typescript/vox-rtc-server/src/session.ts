@@ -1,4 +1,5 @@
 import { ChannelState } from "@eleven-am/pondsocket-client";
+import { randomUUID } from "node:crypto";
 
 import type {
   SocketChannelLike,
@@ -185,6 +186,8 @@ export class VoxRtcControlSession {
   readonly #sessionId: string;
   readonly #channelName: string;
   readonly #joinTimeoutMs: number;
+  #responseGenerationCounter = 0;
+  #responseGenerationId: string | null = null;
 
   constructor(channel: SocketChannelLike, sessionId: string, joinTimeoutMs = 10_000) {
     this.#channel = channel;
@@ -421,22 +424,48 @@ export class VoxRtcControlSession {
   }
 
   startResponse(options?: VoxRtcResponseOptions): void {
-    this.sendControl("response.start", withAllowInterruptions({}, options));
+    this.#responseGenerationCounter += 1;
+    this.#responseGenerationId = [
+      "generation",
+      this.#responseGenerationCounter.toString(36),
+      randomUUID(),
+    ].join("_");
+    this.sendControl(
+      "response.start",
+      withAllowInterruptions(
+        { generation_id: this.#responseGenerationId },
+        options,
+      ),
+    );
   }
 
   appendResponseText(delta: string, options?: VoxRtcResponseOptions): void {
-    this.sendControl("response.delta", withAllowInterruptions({ delta }, options));
+    this.sendControl(
+      "response.delta",
+      withAllowInterruptions(
+        this.#withResponseGeneration({ delta }),
+        options,
+      ),
+    );
   }
 
   commitResponse(): void {
-    this.sendControl("response.commit");
+    this.sendControl(
+      "response.commit",
+      this.#withResponseGeneration({}),
+    );
   }
 
   cancelResponse(): void {
-    this.sendControl("response.cancel");
+    this.sendControl(
+      "response.cancel",
+      this.#withResponseGeneration({}),
+    );
+    this.#responseGenerationId = null;
   }
 
   replaceResponseText(text: string, options?: VoxRtcResponseOptions): void {
+    this.#responseGenerationId = null;
     this.sendControl("response.replace_text", withAllowInterruptions({ text }, options));
   }
 
@@ -455,5 +484,14 @@ export class VoxRtcControlSession {
       event: envelope.event,
       payload: envelope.payload ?? null,
     });
+  }
+
+  #withResponseGeneration(
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (this.#responseGenerationId === null) {
+      return payload;
+    }
+    return { ...payload, generation_id: this.#responseGenerationId };
   }
 }

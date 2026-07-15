@@ -1,0 +1,81 @@
+name: Publish TypeScript SDK
+
+on:
+  push:
+    tags:
+      - "typescript/vox-rtc-client/v*"
+      - "typescript/vox-rtc-server/v*"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to publish
+        required: true
+        type: choice
+        options:
+          - vox-rtc-client
+          - vox-rtc-server
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Select package
+        id: package
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            package="$INPUT_PACKAGE"
+            expected_version=""
+          else
+            case "$REF_NAME" in
+              typescript/vox-rtc-client/v*) package="vox-rtc-client" ;;
+              typescript/vox-rtc-server/v*) package="vox-rtc-server" ;;
+              *) echo "unsupported TypeScript SDK tag: $REF_NAME" >&2; exit 1 ;;
+            esac
+            expected_version="${REF_NAME##*/v}"
+          fi
+          directory="typescript/$package"
+          package_name="$(node -p "require('./$directory/package.json').name")"
+          package_version="$(node -p "require('./$directory/package.json').version")"
+          if [ -n "$expected_version" ] && [ "$package_version" != "$expected_version" ]; then
+            echo "$directory/package.json version $package_version does not match tag $REF_NAME" >&2
+            exit 1
+          fi
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+          echo "name=$package_name" >> "$GITHUB_OUTPUT"
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
+      - name: Install dependencies
+        working-directory: ${{ steps.package.outputs.directory }}
+        run: npm ci
+      - name: Test
+        working-directory: ${{ steps.package.outputs.directory }}
+        run: npm test
+      - name: Build
+        working-directory: ${{ steps.package.outputs.directory }}
+        run: npm run build
+      - name: Publish
+        working-directory: ${{ steps.package.outputs.directory }}
+        env:
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            echo "$PACKAGE_NAME@$PACKAGE_VERSION already published, skipping"
+          else
+            npm publish --access public --provenance
+          fi

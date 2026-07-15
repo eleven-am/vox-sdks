@@ -33,8 +33,10 @@ Each package is versioned independently.
 
 - Go module tags should use the module subdirectory prefix, for example:
   - `go/rtcserver/v0.1.7`
-- TypeScript package versions live in:
-  - `typescript/vox-rtc-server/package.json`
+- TypeScript package versions and release tags are independent:
+  - `typescript/vox-rtc-client/v0.1.3`
+  - `typescript/vox-rtc-server/v0.1.8`
+  - pushing either tag runs `.github/workflows/publish-typescript.yml`, which verifies, builds, and publishes that package to npm through trusted publishing
 - Python package versions live in:
   - `python/vox-rtc-server/pyproject.toml`
 - Rust crate versions live in:

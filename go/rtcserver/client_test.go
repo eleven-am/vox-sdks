@@ -15,6 +15,8 @@ type fakeChannel struct {
 	sent          []sentMessage
 	stateHandlers []func(channelState)
 	msgHandlers   []func(string, map[string]interface{})
+	joinError     string
+	joinState     channelState
 }
 
 type sentMessage struct {
@@ -23,9 +25,17 @@ type sentMessage struct {
 }
 
 func (f *fakeChannel) Join() {
-	for _, handler := range f.stateHandlers {
-		handler(channelStateJoined)
+	state := f.joinState
+	if state == "" {
+		state = channelStateJoined
 	}
+	for _, handler := range f.stateHandlers {
+		handler(state)
+	}
+}
+
+func (f *fakeChannel) JoinError() string {
+	return f.joinError
 }
 
 func (f *fakeChannel) Leave() {}
@@ -123,9 +133,12 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 		ConnectionTimeout: 500 * time.Millisecond,
 		JoinTimeout:       750 * time.Millisecond,
 	})
-	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+	client.socketFactory = func(endpoint string, params map[string]interface{}, reconnectInterval time.Duration) (socketClient, error) {
 		if params["api_key"] != "secret" {
 			t.Fatalf("unexpected socket api_key: %#v", params["api_key"])
+		}
+		if reconnectInterval != 0 {
+			t.Fatalf("unexpected reconnect interval: %s", reconnectInterval)
 		}
 		return fake, nil
 	}
@@ -170,13 +183,79 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 	}
 }
 
+func TestStreamingResponseCommandsShareGenerationID(t *testing.T) {
+	fake := &fakeSocket{channel: &fakeChannel{}}
+	client := NewClient(ClientOptions{HTTPBase: "https://vox.example.com"})
+	client.socketFactory = func(string, map[string]interface{}, time.Duration) (socketClient, error) {
+		return fake, nil
+	}
+
+	session, err := client.AttachSession(context.Background(), "rtc_123")
+	if err != nil {
+		t.Fatalf("AttachSession returned error: %v", err)
+	}
+	session.StartResponse(nil)
+	session.AppendResponseText("hello", nil)
+	session.CommitResponse()
+
+	generationID, ok := fake.channel.sent[0].payload["generation_id"].(string)
+	if !ok || generationID == "" {
+		t.Fatalf("missing generation id: %#v", fake.channel.sent[0].payload)
+	}
+	for _, message := range fake.channel.sent[1:] {
+		if message.payload["generation_id"] != generationID {
+			t.Fatalf("generation id changed: %#v", message.payload)
+		}
+	}
+}
+
+func TestAttachSessionForwardsMaxReconnectDelay(t *testing.T) {
+	fake := &fakeSocket{channel: &fakeChannel{}}
+	client := NewClient(ClientOptions{
+		HTTPBase:          "https://vox.example.com",
+		MaxReconnectDelay: 1500 * time.Millisecond,
+	})
+	client.socketFactory = func(endpoint string, params map[string]interface{}, reconnectInterval time.Duration) (socketClient, error) {
+		if reconnectInterval != 1500*time.Millisecond {
+			t.Fatalf("unexpected reconnect interval: %s", reconnectInterval)
+		}
+		return fake, nil
+	}
+
+	if _, err := client.AttachSession(context.Background(), "rtc_123"); err != nil {
+		t.Fatalf("AttachSession returned error: %v", err)
+	}
+}
+
+func TestAttachSessionReportsJoinDeclineReason(t *testing.T) {
+	fake := &fakeSocket{channel: &fakeChannel{
+		joinState: channelStateDeclined,
+		joinError: "unknown or expired RTC session",
+	}}
+	client := NewClient(ClientOptions{
+		HTTPBase:          "https://vox.example.com",
+		ConnectionTimeout: 500 * time.Millisecond,
+	})
+	client.socketFactory = func(endpoint string, params map[string]interface{}, _ time.Duration) (socketClient, error) {
+		return fake, nil
+	}
+
+	_, err := client.AttachSession(context.Background(), "rtc_123")
+	if err == nil {
+		t.Fatal("expected AttachSession to fail")
+	}
+	if got := err.Error(); got != "RTC channel join failed for /rtc/rtc_123: DECLINED: unknown or expired RTC session" {
+		t.Fatalf("unexpected error: %s", got)
+	}
+}
+
 func TestOnEventIncludesSessionMetadata(t *testing.T) {
 	fake := &fakeSocket{channel: &fakeChannel{}}
 	client := NewClient(ClientOptions{
 		HTTPBase:          "https://vox.example.com",
 		ConnectionTimeout: 500 * time.Millisecond,
 	})
-	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+	client.socketFactory = func(endpoint string, params map[string]interface{}, _ time.Duration) (socketClient, error) {
 		return fake, nil
 	}
 
@@ -215,7 +294,7 @@ func TestNamedEventHooks(t *testing.T) {
 		HTTPBase:          "https://vox.example.com",
 		ConnectionTimeout: 500 * time.Millisecond,
 	})
-	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+	client.socketFactory = func(endpoint string, params map[string]interface{}, _ time.Duration) (socketClient, error) {
 		return fake, nil
 	}
 
@@ -307,7 +386,7 @@ func newAttachedSession(t *testing.T) (*fakeSocket, *ControlSession) {
 		HTTPBase:          "https://vox.example.com",
 		ConnectionTimeout: 500 * time.Millisecond,
 	})
-	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+	client.socketFactory = func(endpoint string, params map[string]interface{}, _ time.Duration) (socketClient, error) {
 		return fake, nil
 	}
 	session, err := client.AttachSession(context.Background(), "rtc_123")
@@ -418,7 +497,7 @@ func TestOnConnectionChangeObservesReconnection(t *testing.T) {
 		HTTPBase:          "https://vox.example.com",
 		ConnectionTimeout: 500 * time.Millisecond,
 	})
-	client.socketFactory = func(endpoint string, params map[string]interface{}) (socketClient, error) {
+	client.socketFactory = func(endpoint string, params map[string]interface{}, _ time.Duration) (socketClient, error) {
 		return fake, nil
 	}
 

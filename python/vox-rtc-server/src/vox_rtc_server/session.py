@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -87,8 +88,34 @@ def _response_options_payload(options: ResponseOptions | None) -> dict[str, Any]
     return payload
 
 
+def _join_error(channel: SocketChannelLike) -> str:
+    for name in ("join_error", "decline_reason"):
+        value = getattr(channel, name, None)
+        if callable(value):
+            try:
+                value = value()
+            except TypeError:
+                value = None
+        if isinstance(value, BaseException):
+            return str(value)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, Mapping):
+            message = value.get("message") or value.get("reason") or value.get("error")
+            if isinstance(message, str) and message:
+                return message
+    return ""
+
+
 class VoxRtcControlSession:
-    __slots__ = ("_channel", "_channel_name", "_join_timeout", "_session_id")
+    __slots__ = (
+        "_channel",
+        "_channel_name",
+        "_join_timeout",
+        "_response_generation_counter",
+        "_response_generation_id",
+        "_session_id",
+    )
 
     def __init__(
         self,
@@ -101,6 +128,8 @@ class VoxRtcControlSession:
         self._session_id = session_id
         self._channel_name = f"/rtc/{session_id}"
         self._join_timeout = join_timeout
+        self._response_generation_counter = 0
+        self._response_generation_id: str | None = None
 
     @property
     def session_id(self) -> str:
@@ -119,8 +148,10 @@ class VoxRtcControlSession:
             if value == ChannelState.JOINED.value and not done.done():
                 done.set_result(None)
             elif value in (ChannelState.DECLINED.value, ChannelState.CLOSED.value) and not done.done():
+                reason = _join_error(self._channel)
+                suffix = f": {reason}" if reason else ""
                 done.set_exception(
-                    RuntimeError(f"RTC channel join failed for {self._channel_name}: {value}")
+                    RuntimeError(f"RTC channel join failed for {self._channel_name}: {value}{suffix}")
                 )
 
         unsubscribe = self._channel.on_channel_state_change(handle_state)
@@ -416,7 +447,13 @@ class VoxRtcControlSession:
         self.send_control("session.update", {"session": session})
 
     def start_response(self, options: ResponseOptions | None = None) -> None:
-        self.send_control("response.start", _response_options_payload(options))
+        self._response_generation_counter += 1
+        self._response_generation_id = (
+            f"generation_{self._response_generation_counter}_{uuid.uuid4().hex}"
+        )
+        payload = _response_options_payload(options)
+        payload["generation_id"] = self._response_generation_id
+        self.send_control("response.start", payload)
 
     def append_response_text(
         self,
@@ -425,19 +462,26 @@ class VoxRtcControlSession:
     ) -> None:
         payload = _response_options_payload(options)
         payload["delta"] = delta
+        self._add_response_generation(payload)
         self.send_control("response.delta", payload)
 
     def commit_response(self) -> None:
-        self.send_control("response.commit")
+        payload: dict[str, Any] = {}
+        self._add_response_generation(payload)
+        self.send_control("response.commit", payload)
 
     def cancel_response(self) -> None:
-        self.send_control("response.cancel")
+        payload: dict[str, Any] = {}
+        self._add_response_generation(payload)
+        self.send_control("response.cancel", payload)
+        self._response_generation_id = None
 
     def replace_response_text(
         self,
         text: str,
         options: ResponseOptions | None = None,
     ) -> None:
+        self._response_generation_id = None
         payload = _response_options_payload(options)
         payload["text"] = text
         self.send_control("response.replace_text", payload)
@@ -461,3 +505,7 @@ class VoxRtcControlSession:
             "client.event",
             {"event": envelope.event, "payload": envelope.payload},
         )
+
+    def _add_response_generation(self, payload: dict[str, Any]) -> None:
+        if self._response_generation_id is not None:
+            payload["generation_id"] = self._response_generation_id

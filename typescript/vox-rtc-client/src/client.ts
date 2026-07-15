@@ -466,6 +466,22 @@ export class VoxRtcBrowserClient {
     this.#handleAudioDuckingControlEvent(event);
   }
 
+  bindControlEventSource(url: string): Unsubscribe {
+    const eventSource = this.#eventSourceFactory(url);
+    eventSource.onmessage = (event) => {
+      try {
+        const controlEvent = JSON.parse(event.data) as VoxRtcControlEventLike;
+        this.handleControlEvent(controlEvent);
+      } catch (error) {
+        this.#emit("error", error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    return () => {
+      eventSource.onmessage = null;
+      eventSource.close();
+    };
+  }
+
   async #resolveSession(override?: VoxRtcBrowserSessionBootstrap): Promise<VoxRtcBrowserSessionBootstrap> {
     if (override) {
       return normalizeBootstrap(override);

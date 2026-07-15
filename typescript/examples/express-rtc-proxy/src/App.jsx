@@ -114,6 +114,7 @@ function App() {
     controlEventsRef.current = source;
     source.onmessage = (message) => {
       const event = JSON.parse(message.data);
+      clientRef.current?.handleControlEvent(event);
       addLog("control.event", event);
       addTimeline(event.type, event.data || {});
       if (event.type === "client.event") {
@@ -186,6 +187,11 @@ function App() {
     setResponseDoneMs(null);
     const client = new VoxRtcBrowserClient({
       audioElement: audioRef.current,
+      audioDucking: {
+        mode: "vox",
+        duckVolume: 0.2,
+        sustainedVolume: 0.05,
+      },
       audioConstraints: {
         echoCancellation: true,
         noiseSuppression: true,

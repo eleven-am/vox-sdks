@@ -460,6 +460,53 @@ test("audioDucking defaults to Vox control events instead of microphone level", 
   }
 });
 
+test("bindControlEventSource forwards app control events into audio ducking", () => {
+  MockEventSource.instances = [];
+  const audioElement = new MockAudioElement();
+  const client = new VoxRtcBrowserClient({
+    audioElement: audioElement as unknown as HTMLAudioElement,
+    audioDucking: {
+      duckVolume: 0.2,
+      releaseDelayMs: 0,
+    },
+    eventSourceFactory: (url) => new MockEventSource(url),
+  });
+
+  const off = client.bindControlEventSource("/api/rtc/session/rtc_test/events");
+  const source = MockEventSource.instances[0];
+
+  assert.equal(source.url, "/api/rtc/session/rtc_test/events");
+  source.onmessage?.({
+    data: JSON.stringify({ type: "input_audio_buffer.speech_started" }),
+  } as MessageEvent<string>);
+  assert.equal(audioElement.volume, 0.2);
+
+  source.onmessage?.({
+    data: JSON.stringify({ type: "response.audio.clear" }),
+  } as MessageEvent<string>);
+  assert.equal(audioElement.volume, 0.8);
+
+  off();
+  assert.equal(source.closed, true);
+  assert.equal(source.onmessage, null);
+});
+
+test("bindControlEventSource reports malformed control event JSON", () => {
+  MockEventSource.instances = [];
+  const client = new VoxRtcBrowserClient({
+    audioDucking: true,
+    eventSourceFactory: (url) => new MockEventSource(url),
+  });
+  const errors: string[] = [];
+  client.on("error", (error) => errors.push(error.message));
+
+  const off = client.bindControlEventSource("/events");
+  MockEventSource.instances[0].onmessage?.({ data: "{" } as MessageEvent<string>);
+  off();
+
+  assert.equal(errors.length, 1);
+});
+
 test("disconnect tears down browser resources", async () => {
   MockPeerConnection.instances = [];
   MockEventSource.instances = [];

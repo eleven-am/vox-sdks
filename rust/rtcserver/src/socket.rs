@@ -191,6 +191,10 @@ impl RawSocketChannel {
         self.message_tx.subscribe()
     }
 
+    pub(crate) async fn decline_reason(&self) -> Option<EventData> {
+        self.channel.decline_reason().await
+    }
+
     fn closed_error(&self) -> Option<VoxRtcError> {
         match self.channel.state() {
             PondChannelState::Closed | PondChannelState::Declined => {

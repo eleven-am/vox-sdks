@@ -1,0 +1,39 @@
+name: Verify TypeScript SDKs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "typescript/**"
+      - ".github/workflows/verify-typescript.yml"
+      - ".github/workflows/publish-typescript.yml"
+  pull_request:
+    paths:
+      - "typescript/**"
+      - ".github/workflows/verify-typescript.yml"
+      - ".github/workflows/publish-typescript.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - typescript/vox-rtc-client
+          - typescript/vox-rtc-server
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

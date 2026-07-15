@@ -27,10 +27,12 @@ class FakeChannel:
         self.state_handlers: list[Callable[[Any], None]] = []
         self.message_handlers: list[Callable[[FakeServerMessage], None]] = []
         self.message_event_handlers: dict[str, list[Callable[[FakeServerMessage], None]]] = {}
+        self.join_state: ChannelState = ChannelState.JOINED
+        self.join_error: str = ""
 
     def join(self) -> None:
         for handler in list(self.state_handlers):
-            handler(ChannelState.JOINED)
+            handler(self.join_state)
 
     def leave(self) -> None:
         return None
@@ -190,6 +192,45 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
     }
     assert fake_socket.channel.sent[1][1] == {"text": "Hello"}
     assert captured_params == {"api_key": "secret"}
+
+
+def test_streaming_response_commands_share_one_generation_id() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+    session = asyncio.run(client.attach_session("rtc_123"))
+
+    session.start_response()
+    session.append_response_text("Hello")
+    session.commit_response()
+
+    generation_id = fake_socket.channel.sent[0][1]["generation_id"]
+    assert isinstance(generation_id, str)
+    assert generation_id
+    assert fake_socket.channel.sent[1][1]["generation_id"] == generation_id
+    assert fake_socket.channel.sent[2][1]["generation_id"] == generation_id
+
+
+def test_attach_session_reports_join_decline_reason() -> None:
+    fake_socket = FakeSocket()
+    fake_socket.channel.join_state = ChannelState.DECLINED
+    fake_socket.channel.join_error = "unknown or expired RTC session"
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+
+    try:
+        asyncio.run(client.attach_session("rtc_123"))
+    except RuntimeError as exc:
+        assert str(exc) == (
+            "RTC channel join failed for /rtc/rtc_123: DECLINED: "
+            "unknown or expired RTC session"
+        )
+    else:
+        raise AssertionError("expected attach_session to fail")
 
 
 def test_on_event_maps_socket_messages_into_wire_events() -> None:

@@ -87,7 +87,7 @@ The first two shapes are preferred for real apps because the backend can keep `V
 
 Pass `audioDucking: true` or an options object to lower the provided audio element while Vox decides whether to interrupt the assistant. This is client-side UX only; Vox still owns VAD, interruption detection, and response cancellation.
 
-By default, ducking follows Vox control events. Your backend should forward the relevant Vox events to the browser, then call `client.handleControlEvent(event)`.
+By default, ducking follows Vox control events. Your backend should forward the relevant Vox events to the browser, then call `client.handleControlEvent(event)`. If your backend exposes those events as a JSON server-event stream, use `bindControlEventSource`.
 
 ```ts
 new VoxRtcBrowserClient({
@@ -109,6 +109,19 @@ client.handleControlEvent({
   type: "input_audio_buffer.speech_started"
 });
 ```
+
+```ts
+const stopControlEvents = client.bindControlEventSource(
+  `/api/rtc/session/${sessionId}/events`
+);
+
+// later
+stopControlEvents();
+```
+
+`response.audio.clear` is treated as a ducking release signal. It does not remove
+or stop Vox media by itself; pause or reset your own `<audio>` element if your app
+wants visible playback controls to reflect the clear event immediately.
 
 Supported modes:
 

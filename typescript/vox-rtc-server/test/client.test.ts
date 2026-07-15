@@ -168,6 +168,27 @@ test("attachSession joins the RTC channel and sends the expected control message
   });
 });
 
+test("streaming response commands share one generation id", async () => {
+  const fakeSocket = new FakeSocket();
+  const client = new VoxRtcServerClient({
+    httpBase: "https://vox.example.com",
+    fetch,
+    socketFactory: () => fakeSocket as never,
+  });
+  const session = await client.attachSession("rtc_123");
+
+  session.startResponse();
+  session.appendResponseText("Hello");
+  session.commitResponse();
+
+  const [start, delta, commit] = fakeSocket.channel.sent;
+  const generationId = start?.payload.generation_id;
+  assert.equal(typeof generationId, "string");
+  assert.ok(String(generationId).length > 0);
+  assert.equal(delta?.payload.generation_id, generationId);
+  assert.equal(commit?.payload.generation_id, generationId);
+});
+
 test("attachSession accepts an already joined channel without joining it again", async () => {
   const fakeSocket = new FakeSocket();
   fakeSocket.channel.state = ChannelState.JOINED;

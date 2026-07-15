@@ -2,15 +2,25 @@ package rtcserver
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 )
 
 type ControlSession struct {
-	channel     socketChannel
-	sessionID   string
-	channelName string
-	joinTimeout time.Duration
+	channel              socketChannel
+	sessionID            string
+	channelName          string
+	joinTimeout          time.Duration
+	responseMu           sync.Mutex
+	responseGeneration   uint64
+	responseGenerationID string
+}
+
+type joinErrorReporter interface {
+	JoinError() string
 }
 
 func newControlSession(channel socketChannel, sessionID string, joinTimeout time.Duration) *ControlSession {
@@ -40,8 +50,15 @@ func (s *ControlSession) Join(ctx context.Context) error {
 			default:
 			}
 		case channelStateClosed, channelStateDeclined:
+			reason := ""
+			if reporter, ok := s.channel.(joinErrorReporter); ok {
+				reason = reporter.JoinError()
+			}
+			if reason != "" {
+				reason = ": " + reason
+			}
 			select {
-			case done <- fmt.Errorf("RTC channel closed during join: %s", s.channelName):
+			case done <- fmt.Errorf("RTC channel join failed for %s: %s%s", s.channelName, state, reason):
 			default:
 			}
 		}
@@ -312,24 +329,56 @@ func (s *ControlSession) Configure(config SessionConfig) {
 }
 
 func (s *ControlSession) StartResponse(options *ResponseOptions) {
-	s.SendControl("response.start", responseOptionsPayload(options))
+	payload := responseOptionsPayload(options)
+	s.responseMu.Lock()
+	s.responseGeneration++
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err == nil {
+		s.responseGenerationID = fmt.Sprintf(
+			"generation_%d_%s",
+			s.responseGeneration,
+			hex.EncodeToString(random),
+		)
+	} else {
+		s.responseGenerationID = fmt.Sprintf(
+			"generation_%d_%d",
+			s.responseGeneration,
+			time.Now().UnixNano(),
+		)
+	}
+	payload["generation_id"] = s.responseGenerationID
+	s.responseMu.Unlock()
+	s.SendControl("response.start", payload)
 }
 
 func (s *ControlSession) AppendResponseText(delta string, options *ResponseOptions) {
 	payload := responseOptionsPayload(options)
 	payload["delta"] = delta
+	s.addResponseGeneration(payload)
 	s.SendControl("response.delta", payload)
 }
 
 func (s *ControlSession) CommitResponse() {
-	s.SendControl("response.commit", nil)
+	payload := map[string]interface{}{}
+	s.addResponseGeneration(payload)
+	s.SendControl("response.commit", payload)
 }
 
 func (s *ControlSession) CancelResponse() {
-	s.SendControl("response.cancel", nil)
+	payload := map[string]interface{}{}
+	s.responseMu.Lock()
+	if s.responseGenerationID != "" {
+		payload["generation_id"] = s.responseGenerationID
+	}
+	s.responseGenerationID = ""
+	s.responseMu.Unlock()
+	s.SendControl("response.cancel", payload)
 }
 
 func (s *ControlSession) ReplaceResponseText(text string, options *ResponseOptions) {
+	s.responseMu.Lock()
+	s.responseGenerationID = ""
+	s.responseMu.Unlock()
 	payload := responseOptionsPayload(options)
 	payload["text"] = text
 	s.SendControl("response.replace_text", payload)
@@ -350,6 +399,14 @@ func (s *ControlSession) SendClientEvent(event ClientEvent) {
 		"event":   event.Event,
 		"payload": event.Payload,
 	})
+}
+
+func (s *ControlSession) addResponseGeneration(payload map[string]interface{}) {
+	s.responseMu.Lock()
+	defer s.responseMu.Unlock()
+	if s.responseGenerationID != "" {
+		payload["generation_id"] = s.responseGenerationID
+	}
 }
 
 func responseOptionsPayload(options *ResponseOptions) map[string]interface{} {

@@ -33,7 +33,7 @@ type Client struct {
 	apiKey            string
 	socketBase        string
 	httpClient        *http.Client
-	socketFactory     func(endpoint string, params map[string]interface{}) (socketClient, error)
+	socketFactory     func(endpoint string, params map[string]interface{}, reconnectInterval time.Duration) (socketClient, error)
 	connectionTimeout time.Duration
 	joinTimeout       time.Duration
 	maxReconnectDelay time.Duration
@@ -82,10 +82,10 @@ func NewClient(options ClientOptions) *Client {
 		httpClient:        httpClient,
 		connectionTimeout: valueOrDefaultDuration(options.ConnectionTimeout, 10*time.Second),
 		joinTimeout:       valueOrDefaultDuration(options.JoinTimeout, 10*time.Second),
-		maxReconnectDelay: valueOrDefaultDuration(options.MaxReconnectDelay, 30*time.Second),
+		maxReconnectDelay: options.MaxReconnectDelay,
 		socketParams:      socketParams,
-		socketFactory: func(endpoint string, params map[string]interface{}) (socketClient, error) {
-			return newRawSocketClient(endpoint, params)
+		socketFactory: func(endpoint string, params map[string]interface{}, reconnectInterval time.Duration) (socketClient, error) {
+			return newRawSocketClient(endpoint, params, reconnectInterval)
 		},
 	}
 }
@@ -212,7 +212,7 @@ func (c *Client) ensureSocket() (socketClient, error) {
 	if c.socket != nil {
 		return c.socket, nil
 	}
-	socket, err := c.socketFactory(c.socketBase, c.socketParams)
+	socket, err := c.socketFactory(c.socketBase, c.socketParams, c.maxReconnectDelay)
 	if err != nil {
 		return nil, err
 	}

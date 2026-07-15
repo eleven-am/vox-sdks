@@ -1,5 +1,7 @@
 package rtcserver
 
+import "time"
+
 import pondsocket "github.com/eleven-am/pondsocket/go/pondsocket-client"
 
 type channelState string
@@ -20,8 +22,12 @@ type rawSocketChannel struct {
 	channel *pondsocket.Channel
 }
 
-func newRawSocketClient(endpoint string, params map[string]interface{}) (*rawSocketClient, error) {
-	client, err := pondsocket.NewPondClient(endpoint, params)
+func newRawSocketClient(endpoint string, params map[string]interface{}, reconnectInterval time.Duration) (*rawSocketClient, error) {
+	config := pondsocket.DefaultClientConfig()
+	if reconnectInterval > 0 {
+		config.ReconnectInterval = reconnectInterval
+	}
+	client, err := pondsocket.NewPondClientWithConfig(endpoint, params, config)
 	if err != nil {
 		return nil, err
 	}

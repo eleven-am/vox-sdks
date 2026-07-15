@@ -3,6 +3,8 @@ use crate::socket::RawSocketChannel;
 use crate::types::*;
 use serde_json::Value;
 use std::ops::ControlFlow;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
@@ -13,6 +15,13 @@ pub struct VoxRtcControlSession {
     session_id: String,
     channel_name: String,
     join_timeout: Duration,
+    response_generation: Arc<Mutex<ResponseGeneration>>,
+}
+
+#[derive(Default)]
+struct ResponseGeneration {
+    counter: u64,
+    id: Option<String>,
 }
 
 pub struct Listener {
@@ -37,6 +46,7 @@ impl VoxRtcControlSession {
             session_id,
             channel_name,
             join_timeout,
+            response_generation: Arc::new(Mutex::new(ResponseGeneration::default())),
         }
     }
 
@@ -52,15 +62,18 @@ impl VoxRtcControlSession {
         let mut states = self.channel.subscribe_state();
         self.channel.join().await?;
         let channel_name = self.channel.name().to_owned();
+        let channel = self.channel.clone();
         timeout(self.join_timeout, async move {
             loop {
                 let state = *states.borrow_and_update();
                 match state {
                     ChannelState::Joined => return Ok(()),
                     ChannelState::Closed | ChannelState::Declined => {
+                        let reason = join_decline_reason(channel.decline_reason().await);
                         return Err(VoxRtcError::JoinFailed {
                             channel: channel_name,
                             state: format!("{state:?}"),
+                            reason,
                         });
                     }
                     _ => {}
@@ -416,8 +429,10 @@ impl VoxRtcControlSession {
     }
 
     pub async fn start_response(&self, options: Option<ResponseOptions>) -> Result<()> {
-        self.send_control("response.start", response_options_payload(options))
-            .await
+        let mut payload = response_options_payload(options);
+        let generation_id = self.next_response_generation();
+        payload.insert("generation_id".to_owned(), Value::String(generation_id));
+        self.send_control("response.start", payload).await
     }
 
     pub async fn append_response_text(
@@ -427,15 +442,21 @@ impl VoxRtcControlSession {
     ) -> Result<()> {
         let mut payload = response_options_payload(options);
         payload.insert("delta".to_owned(), Value::String(delta.into()));
+        self.add_response_generation(&mut payload);
         self.send_control("response.delta", payload).await
     }
 
     pub async fn commit_response(&self) -> Result<()> {
-        self.send_control("response.commit", EventData::new()).await
+        let mut payload = EventData::new();
+        self.add_response_generation(&mut payload);
+        self.send_control("response.commit", payload).await
     }
 
     pub async fn cancel_response(&self) -> Result<()> {
-        self.send_control("response.cancel", EventData::new()).await
+        let mut payload = EventData::new();
+        self.add_response_generation(&mut payload);
+        self.clear_response_generation();
+        self.send_control("response.cancel", payload).await
     }
 
     pub async fn replace_response_text(
@@ -443,6 +464,7 @@ impl VoxRtcControlSession {
         text: impl Into<String>,
         options: Option<ResponseOptions>,
     ) -> Result<()> {
+        self.clear_response_generation();
         let mut payload = response_options_payload(options);
         payload.insert("text".to_owned(), Value::String(text.into()));
         self.send_control("response.replace_text", payload).await
@@ -469,6 +491,41 @@ impl VoxRtcControlSession {
         payload.insert("payload".to_owned(), envelope.payload);
         self.send_control(EVENT_CLIENT_EVENT, payload).await
     }
+
+    fn next_response_generation(&self) -> String {
+        let mut state = self
+            .response_generation
+            .lock()
+            .expect("response generation mutex poisoned");
+        state.counter += 1;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let generation_id = format!("generation_{}_{}", state.counter, nonce);
+        state.id = Some(generation_id.clone());
+        generation_id
+    }
+
+    fn add_response_generation(&self, payload: &mut EventData) {
+        let state = self
+            .response_generation
+            .lock()
+            .expect("response generation mutex poisoned");
+        if let Some(generation_id) = &state.id {
+            payload.insert(
+                "generation_id".to_owned(),
+                Value::String(generation_id.clone()),
+            );
+        }
+    }
+
+    fn clear_response_generation(&self) {
+        self.response_generation
+            .lock()
+            .expect("response generation mutex poisoned")
+            .id = None;
+    }
 }
 
 fn next_message(
@@ -478,6 +535,22 @@ fn next_message(
         Ok(message) => ControlFlow::Continue(Some(message)),
         Err(RecvError::Lagged(_)) => ControlFlow::Continue(None),
         Err(RecvError::Closed) => ControlFlow::Break(()),
+    }
+}
+
+fn join_decline_reason(reason: Option<EventData>) -> Option<String> {
+    let reason = reason?;
+    for key in ["message", "reason", "error"] {
+        if let Some(value) = reason.get(key).and_then(Value::as_str)
+            && !value.is_empty()
+        {
+            return Some(value.to_owned());
+        }
+    }
+    if reason.is_empty() {
+        None
+    } else {
+        Some(Value::Object(reason).to_string())
     }
 }
 
@@ -529,6 +602,24 @@ mod tests {
         value.as_object().cloned().expect("object payload")
     }
 
+    #[test]
+    fn join_decline_reason_prefers_structured_message_fields() {
+        assert_eq!(
+            join_decline_reason(Some(payload(json!({ "message": "expired" })))),
+            Some("expired".to_owned())
+        );
+        assert_eq!(
+            join_decline_reason(Some(payload(json!({ "reason": "missing" })))),
+            Some("missing".to_owned())
+        );
+        assert_eq!(
+            join_decline_reason(Some(payload(json!({ "channel": "/rtc/abc" })))),
+            Some(r#"{"channel":"/rtc/abc"}"#.to_owned())
+        );
+        assert_eq!(join_decline_reason(Some(EventData::new())), None);
+        assert_eq!(join_decline_reason(None), None);
+    }
+
     async fn recv<T>(rx: &mut mpsc::UnboundedReceiver<T>) -> T {
         timeout(Duration::from_secs(1), rx.recv())
             .await
@@ -550,6 +641,25 @@ mod tests {
             next_message(Err(RecvError::Closed)),
             ControlFlow::Break(())
         ));
+    }
+
+    #[tokio::test]
+    async fn response_commands_share_one_generation_id() {
+        let (session, _) = session().await;
+        let generation_id = session.next_response_generation();
+        let mut delta = payload(json!({ "delta": "hello" }));
+        session.add_response_generation(&mut delta);
+        let mut commit = EventData::new();
+        session.add_response_generation(&mut commit);
+
+        assert_eq!(
+            delta.get("generation_id"),
+            Some(&Value::String(generation_id.clone()))
+        );
+        assert_eq!(
+            commit.get("generation_id"),
+            Some(&Value::String(generation_id))
+        );
     }
 
     #[tokio::test]

@@ -20,8 +20,12 @@ pub enum VoxRtcError {
     #[error("timed out waiting for RTC channel join on {0}")]
     JoinTimeout(String),
 
-    #[error("RTC channel join failed for {channel}: {state}")]
-    JoinFailed { channel: String, state: String },
+    #[error("RTC channel join failed for {channel}: {state}{reason_suffix}", reason_suffix = reason.as_ref().map(|value| format!(": {value}")).unwrap_or_default())]
+    JoinFailed {
+        channel: String,
+        state: String,
+        reason: Option<String>,
+    },
 
     #[error("socket is disconnected")]
     Disconnected,
