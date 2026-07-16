@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -300,6 +301,34 @@ func (s *ControlSession) SendControl(event string, payload map[string]interface{
 		payload = map[string]interface{}{}
 	}
 	s.channel.SendMessage(event, payload)
+}
+
+func (s *ControlSession) SendOffer(offer RTCSessionDescription, restart bool) error {
+	if offer.Type != "offer" || strings.TrimSpace(offer.SDP) == "" {
+		return fmt.Errorf("RTC offer requires a non-empty SDP offer")
+	}
+	s.SendControl("rtc.offer", map[string]interface{}{
+		"offer":   offer,
+		"restart": restart,
+	})
+	return nil
+}
+
+func (s *ControlSession) SendIceCandidate(candidate *RTCIceCandidate) {
+	var payload interface{}
+	if candidate != nil {
+		payload = candidate
+	}
+	s.SendControl("rtc.ice_candidate", map[string]interface{}{
+		"candidate": payload,
+	})
+}
+
+func (s *ControlSession) CloseRTC(reason string) {
+	if strings.TrimSpace(reason) == "" {
+		reason = "client_closed"
+	}
+	s.SendControl("rtc.close", map[string]interface{}{"reason": reason})
 }
 
 func (s *ControlSession) Configure(config SessionConfig) {

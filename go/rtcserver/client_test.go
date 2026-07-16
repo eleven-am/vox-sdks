@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 )
 
 type fakeChannel struct {
+	mu            sync.Mutex
 	sent          []sentMessage
 	stateHandlers []func(channelState)
 	msgHandlers   []func(string, map[string]interface{})
@@ -41,6 +43,8 @@ func (f *fakeChannel) JoinError() string {
 func (f *fakeChannel) Leave() {}
 
 func (f *fakeChannel) SendMessage(event string, payload map[string]interface{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.sent = append(f.sent, sentMessage{event: event, payload: payload})
 }
 
@@ -55,9 +59,18 @@ func (f *fakeChannel) OnChannelStateChange(callback func(state channelState)) fu
 }
 
 func (f *fakeChannel) emit(event string, payload map[string]interface{}) {
-	for _, handler := range f.msgHandlers {
+	f.mu.Lock()
+	handlers := append([]func(string, map[string]interface{}){}, f.msgHandlers...)
+	f.mu.Unlock()
+	for _, handler := range handlers {
 		handler(event, payload)
 	}
+}
+
+func (f *fakeChannel) sentMessages() []sentMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]sentMessage(nil), f.sent...)
 }
 
 type fakeSocket struct {

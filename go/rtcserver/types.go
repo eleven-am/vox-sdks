@@ -15,6 +15,9 @@ const (
 	EventResponseCreated           = "response.created"
 	EventResponseDone              = "response.done"
 	EventRTCSessionAttached        = "rtc.session.attached"
+	EventRTCAnswer                 = "rtc.answer"
+	EventRTCIceCandidate           = "rtc.ice_candidate"
+	EventRTCSessionClosed          = "rtc.session.closed"
 	EventSessionCreated            = "session.created"
 	EventSpeechStarted             = "input_audio_buffer.speech_started"
 	EventSpeechStopped             = "input_audio_buffer.speech_stopped"
@@ -38,15 +41,15 @@ type SessionBootstrap struct {
 }
 
 type RTCSessionDescription struct {
-	Type string
-	SDP  string
+	Type string `json:"type"`
+	SDP  string `json:"sdp"`
 }
 
 type RTCIceCandidate struct {
-	Candidate        string
-	SDPMid           *string
-	SDPMLineIndex    *uint32
-	UsernameFragment *string
+	Candidate        string  `json:"candidate"`
+	SDPMid           *string `json:"sdpMid"`
+	SDPMLineIndex    *uint32 `json:"sdpMLineIndex"`
+	UsernameFragment *string `json:"usernameFragment"`
 }
 
 type SessionConfig struct {
