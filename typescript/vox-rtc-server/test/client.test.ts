@@ -89,9 +89,8 @@ test("createSession parses the RTC bootstrap response", async () => {
         assert.equal((init?.headers as Record<string, string>).authorization, "Bearer secret");
         return new Response(JSON.stringify({
           session_id: "rtc_123",
-          client_token: "tok_123",
           expires_at: "2026-01-01T00:00:00Z",
-          join_token_ttl_seconds: 120,
+          attach_ttl_seconds: 120,
           ice_servers: [{ urls: ["stun:turn.example.com:3478"] }],
         }), {
           status: 200,
@@ -103,8 +102,7 @@ test("createSession parses the RTC bootstrap response", async () => {
 
     const bootstrap = await client.createSession();
     assert.equal(bootstrap.sessionId, "rtc_123");
-    assert.equal(bootstrap.clientToken, "tok_123");
-    assert.equal(bootstrap.joinTokenTtlSeconds, 120);
+    assert.equal(bootstrap.attachTtlSeconds, 120);
     assert.equal(client.httpBase, "https://vox.example.com");
     assert.equal(client.socketBase, "https://vox.example.com/v1/socket");
   } finally {

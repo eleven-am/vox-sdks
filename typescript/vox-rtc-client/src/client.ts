@@ -1,6 +1,4 @@
 import type {
-  EventSourceFactory,
-  EventSourceLike,
   GetUserMedia,
   PeerConnectionFactory,
   Unsubscribe,
@@ -15,8 +13,10 @@ import type {
   VoxRtcAudioDuckingMode,
   VoxRtcControlEventLike,
   VoxRtcClientEventEnvelope,
-  VoxRtcOfferResponse,
+  VoxRtcSignalingEvent,
+  WebSocketFactory,
 } from "./types.js";
+import { GatewaySignalingClient } from "./signaling.js";
 
 type ListenerMap = {
   [K in VoxRtcBrowserEventName]?: Set<VoxRtcBrowserHandler<K>>;
@@ -59,67 +59,12 @@ const DUCKING_VOX_STOP_EVENTS = new Set([
   "response.done",
 ]);
 
-function normalizeBase(base: string): string {
-  return base.replace(/\/+$/, "");
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function requiredString(data: Record<string, unknown>, camelKey: string, snakeKey: string): string {
-  const value = data[camelKey] ?? data[snakeKey];
-  if (typeof value !== "string" || !value) {
-    throw new Error(`Missing required RTC bootstrap field: ${camelKey}`);
-  }
-  return value;
-}
-
-function normalizeBootstrap(data: unknown): VoxRtcBrowserSessionBootstrap {
-  if (!isRecord(data)) {
-    throw new Error("RTC session bootstrap must be an object");
-  }
-  const iceServers = data.iceServers ?? data.ice_servers;
-  if (!Array.isArray(iceServers)) {
-    throw new Error("RTC session bootstrap must include iceServers");
-  }
-  return {
-    sessionId: requiredString(data, "sessionId", "session_id"),
-    clientToken: requiredString(data, "clientToken", "client_token"),
-    iceServers: iceServers as RTCIceServer[],
-    voxHttpBase: typeof data.voxHttpBase === "string" ? data.voxHttpBase : undefined,
-    expiresAt: typeof data.expiresAt === "string"
-      ? data.expiresAt
-      : typeof data.expires_at === "string"
-        ? data.expires_at
-        : undefined,
-    joinTokenTtlSeconds: typeof data.joinTokenTtlSeconds === "number"
-      ? data.joinTokenTtlSeconds
-      : typeof data.join_token_ttl_seconds === "number"
-        ? data.join_token_ttl_seconds
-        : undefined,
-  };
-}
-
-function normalizeOfferResponse(data: unknown): VoxRtcOfferResponse {
-  if (!isRecord(data)) {
-    throw new Error("RTC offer response must be an object");
-  }
-  return {
-    sessionId: requiredString(data, "sessionId", "session_id"),
-    mediaToken: requiredString(data, "mediaToken", "media_token"),
-    type: requiredString(data, "type", "type") as RTCSdpType,
-    sdp: requiredString(data, "sdp", "sdp"),
-    eventsUrl: requiredString(data, "eventsUrl", "events_url"),
-  };
-}
-
 function defaultPeerConnectionFactory(configuration: RTCConfiguration): RTCPeerConnection {
   return new RTCPeerConnection(configuration);
-}
-
-function defaultEventSourceFactory(url: string): EventSourceLike {
-  return new EventSource(url);
 }
 
 function defaultGetUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream> {
@@ -127,10 +72,6 @@ function defaultGetUserMedia(constraints: MediaStreamConstraints): Promise<Media
     throw new Error("navigator.mediaDevices.getUserMedia is unavailable");
   }
   return navigator.mediaDevices.getUserMedia(constraints);
-}
-
-function defaultFetch(...args: Parameters<typeof fetch>): ReturnType<typeof fetch> {
-  return globalThis.fetch(...args);
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -262,13 +203,11 @@ function stopStream(stream: MediaStream | null): void {
 }
 
 export class VoxRtcBrowserClient {
-  readonly #fetch: typeof fetch;
+  readonly #signalingEndpoint: string;
+  readonly #signalingTimeoutMs?: number;
+  readonly #webSocketFactory?: WebSocketFactory;
   readonly #peerConnectionFactory: PeerConnectionFactory;
-  readonly #eventSourceFactory: EventSourceFactory;
   readonly #getUserMedia: GetUserMedia;
-  readonly #sessionProvider?: VoxRtcBrowserSessionBootstrap | (() => Promise<VoxRtcBrowserSessionBootstrap>);
-  readonly #sessionEndpoint?: string;
-  readonly #configuredHttpBase?: string;
   readonly #audioElement?: HTMLAudioElement;
   readonly #defaultAudioConstraints: boolean | MediaTrackConstraints;
   readonly #autoPlayRemoteAudio: boolean;
@@ -279,15 +218,16 @@ export class VoxRtcBrowserClient {
 
   #status: VoxRtcBrowserState["status"] = "idle";
   #session: VoxRtcBrowserSessionBootstrap | null = null;
-  #httpBase: string | null = null;
-  #mediaToken: string | null = null;
+  #signaling: GatewaySignalingClient | null = null;
   #peerConnection: RTCPeerConnection | null = null;
   #dataChannel: RTCDataChannel | null = null;
-  #eventSource: EventSourceLike | null = null;
-  #eventSourceCleanups: Unsubscribe[] = [];
   #localStream: MediaStream | null = null;
   #remoteStream: MediaStream | null = null;
-  #pendingCandidates: Array<RTCIceCandidateInit | null> = [];
+  #pendingLocalCandidates: Array<RTCIceCandidateInit | null> = [];
+  #pendingServerCandidates: Array<RTCIceCandidateInit | null> = [];
+  #bufferLocalCandidates = false;
+  #negotiating = false;
+  #awaitingRemoteDescription = false;
   #audioDuckingContext: AudioContext | null = null;
   #audioDuckingSource: MediaStreamAudioSourceNode | null = null;
   #audioDuckingAnalyser: AnalyserNode | null = null;
@@ -302,14 +242,15 @@ export class VoxRtcBrowserClient {
   #audioDuckingLocalSuppressed = false;
   #audioDuckingVoxActive = false;
 
-  constructor(options: VoxRtcBrowserClientOptions = {}) {
-    this.#fetch = options.fetch ?? defaultFetch;
+  constructor(options: VoxRtcBrowserClientOptions) {
+    if (!options.signalingEndpoint.startsWith("/") || options.signalingEndpoint.startsWith("//")) {
+      throw new Error("RTC signalingEndpoint must be a same-origin path");
+    }
+    this.#signalingEndpoint = options.signalingEndpoint;
+    this.#signalingTimeoutMs = options.signalingTimeoutMs;
+    this.#webSocketFactory = options.webSocketFactory;
     this.#peerConnectionFactory = options.peerConnectionFactory ?? defaultPeerConnectionFactory;
-    this.#eventSourceFactory = options.eventSourceFactory ?? defaultEventSourceFactory;
     this.#getUserMedia = options.getUserMedia ?? defaultGetUserMedia;
-    this.#sessionProvider = options.session;
-    this.#sessionEndpoint = options.sessionEndpoint;
-    this.#configuredHttpBase = options.httpBase ? normalizeBase(options.httpBase) : undefined;
     this.#audioElement = options.audioElement;
     this.#defaultAudioConstraints = options.audioConstraints ?? true;
     this.#autoPlayRemoteAudio = options.autoPlayRemoteAudio ?? true;
@@ -359,12 +300,17 @@ export class VoxRtcBrowserClient {
     }
     this.#setStatus("connecting");
     try {
-      const session = await this.#resolveSession(options.session);
+      const signaling = new GatewaySignalingClient({
+        endpoint: this.#signalingEndpoint,
+        timeoutMs: this.#signalingTimeoutMs,
+        webSocketFactory: this.#webSocketFactory,
+        onEvent: (event) => this.#handleSignalingEvent(event),
+        onError: (error) => this.#emit("error", error),
+        onClose: (reason) => this.#handleUnexpectedSignalingClose(reason),
+      });
+      this.#signaling = signaling;
+      const session = await signaling.connect();
       this.#session = session;
-      this.#httpBase = normalizeBase(session.voxHttpBase ?? this.#configuredHttpBase ?? "");
-      if (!this.#httpBase) {
-        throw new Error("Vox HTTP base is required. Pass httpBase or include voxHttpBase in the session bootstrap.");
-      }
       this.#emit("session", session);
 
       const pc = this.#peerConnectionFactory({
@@ -386,22 +332,7 @@ export class VoxRtcBrowserClient {
         this.#emit("localStream", localStream);
       }
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      if (!pc.localDescription?.sdp) {
-        throw new Error("Local SDP offer is missing after setLocalDescription");
-      }
-
-      const answer = await this.#postVoxJson(
-        `/v1/rtc/sessions/${session.sessionId}/offer`,
-        { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
-        session.clientToken,
-      );
-      const normalizedAnswer = normalizeOfferResponse(answer);
-      this.#mediaToken = normalizedAnswer.mediaToken;
-      await pc.setRemoteDescription({ type: normalizedAnswer.type, sdp: normalizedAnswer.sdp });
-      await this.#flushCandidates();
-      this.#attachEvents(normalizedAnswer.eventsUrl);
+      await this.#negotiate({ restart: false });
       this.#setStatus("connected");
       return session;
     } catch (error) {
@@ -418,6 +349,7 @@ export class VoxRtcBrowserClient {
       return;
     }
     this.#setStatus("disconnecting");
+    this.#signaling?.close("client_disconnected");
     this.#cleanup();
     this.#setStatus("closed");
   }
@@ -449,6 +381,20 @@ export class VoxRtcBrowserClient {
     return nextStream;
   }
 
+  async restartIce(): Promise<void> {
+    if (this.#status !== "connected" || !this.#peerConnection || !this.#signaling) {
+      throw new Error("Cannot restart ICE before connect()");
+    }
+    try {
+      this.#peerConnection.restartIce?.();
+      await this.#negotiate({ restart: true });
+    } catch (error) {
+      this.#emit("error", error instanceof Error ? error : new Error(String(error)));
+      await this.disconnect();
+      throw error;
+    }
+  }
+
   sendEvent(envelope: VoxRtcClientEventEnvelope): void {
     if (!this.#dataChannel || this.#dataChannel.readyState !== "open") {
       throw new Error("Vox RTC data channel is not open");
@@ -464,42 +410,6 @@ export class VoxRtcBrowserClient {
 
   handleControlEvent(event: VoxRtcControlEventLike): void {
     this.#handleAudioDuckingControlEvent(event);
-  }
-
-  bindControlEventSource(url: string): Unsubscribe {
-    const eventSource = this.#eventSourceFactory(url);
-    eventSource.onmessage = (event) => {
-      try {
-        const controlEvent = JSON.parse(event.data) as VoxRtcControlEventLike;
-        this.handleControlEvent(controlEvent);
-      } catch (error) {
-        this.#emit("error", error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    return () => {
-      eventSource.onmessage = null;
-      eventSource.close();
-    };
-  }
-
-  async #resolveSession(override?: VoxRtcBrowserSessionBootstrap): Promise<VoxRtcBrowserSessionBootstrap> {
-    if (override) {
-      return normalizeBootstrap(override);
-    }
-    if (typeof this.#sessionProvider === "function") {
-      return normalizeBootstrap(await this.#sessionProvider());
-    }
-    if (this.#sessionProvider) {
-      return normalizeBootstrap(this.#sessionProvider);
-    }
-    if (this.#sessionEndpoint) {
-      const response = await this.#fetch(this.#sessionEndpoint, { method: "POST" });
-      if (!response.ok) {
-        throw new Error(`Failed to create RTC session: ${response.status} ${await response.text()}`);
-      }
-      return normalizeBootstrap(await response.json());
-    }
-    throw new Error("No RTC session source configured. Pass session, session provider, or sessionEndpoint.");
   }
 
   #bindPeerConnection(pc: RTCPeerConnection): void {
@@ -520,11 +430,11 @@ export class VoxRtcBrowserClient {
     pc.onicecandidate = (event) => {
       const candidate = event.candidate ? event.candidate.toJSON() : null;
       this.#emit("localIceCandidate", candidate);
-      if (!this.#mediaToken) {
-        this.#pendingCandidates.push(candidate);
+      if (this.#bufferLocalCandidates) {
+        this.#pendingLocalCandidates.push(candidate);
         return;
       }
-      this.#postCandidate(candidate).catch((error) => this.#emit("error", error));
+      this.#sendLocalCandidate(candidate);
     };
     pc.onconnectionstatechange = () => this.#emitState();
     pc.oniceconnectionstatechange = () => this.#emitState();
@@ -553,88 +463,125 @@ export class VoxRtcBrowserClient {
     };
   }
 
-  #attachEvents(eventsUrl: string): void {
-    if (!this.#httpBase) {
-      throw new Error("Cannot attach RTC events without Vox HTTP base");
-    }
-    this.#closeEventSource();
-    const url = eventsUrl.startsWith("http") ? eventsUrl : `${this.#httpBase}${eventsUrl}`;
-    const eventSource = this.#eventSourceFactory(url);
-    this.#eventSource = eventSource;
+  #handleSignalingEvent(event: VoxRtcSignalingEvent): void {
+    this.#emit("signalingMessage", event);
+    this.handleControlEvent({ type: event.type, data: event.data });
 
-    eventSource.onmessage = (event) => {
-      this.#emit("sseMessage", JSON.parse(event.data) as Record<string, unknown>);
-    };
-    const addEventSourceListener = (type: string, listener: (event: MessageEvent<string>) => void) => {
-      eventSource.addEventListener(type, listener);
-      this.#eventSourceCleanups.push(() => eventSource.removeEventListener?.(type, listener));
-    };
-
-    addEventSourceListener("rtc.ice_candidate", (event) => {
-      const payload = JSON.parse(event.data) as { candidate?: RTCIceCandidateInit | null };
-      const candidate = payload.candidate ?? null;
+    if (event.type === "rtc.ice_candidate") {
+      const candidate = this.#candidateFromSignaling(event.data);
       this.#emit("serverIceCandidate", candidate);
-      this.#peerConnection?.addIceCandidate(candidate).catch((error) => this.#emit("error", error));
-    });
-    addEventSourceListener("rtc.connection_state", (event) => {
-      this.#emit("serverConnectionState", JSON.parse(event.data) as Record<string, unknown>);
-    });
-    addEventSourceListener("rtc.ice_connection_state", (event) => {
-      this.#emit("serverIceConnectionState", JSON.parse(event.data) as Record<string, unknown>);
-    });
-  }
-
-  async #flushCandidates(): Promise<void> {
-    const candidates = this.#pendingCandidates;
-    this.#pendingCandidates = [];
-    for (const candidate of candidates) {
-      await this.#postCandidate(candidate);
-    }
-  }
-
-  async #postCandidate(candidate: RTCIceCandidateInit | null): Promise<void> {
-    if (!this.#session || !this.#mediaToken) {
-      this.#pendingCandidates.push(candidate);
+      const pc = this.#peerConnection;
+      if (!pc?.remoteDescription || this.#awaitingRemoteDescription) {
+        this.#pendingServerCandidates.push(candidate);
+        return;
+      }
+      pc.addIceCandidate(candidate).catch((error) => this.#emit("error", error));
       return;
     }
-    await this.#postVoxJson(
-      `/v1/rtc/sessions/${this.#session.sessionId}/candidates`,
-      { candidate },
-      this.#mediaToken,
-    );
+    if (event.type === "rtc.connection_state") {
+      this.#emit("serverConnectionState", event.data);
+      return;
+    }
+    if (event.type === "rtc.ice_connection_state") {
+      this.#emit("serverIceConnectionState", event.data);
+      return;
+    }
+    if (event.type === "rtc.session.closed" && this.#status !== "closed") {
+      this.#cleanup();
+      this.#setStatus("closed");
+    }
   }
 
-  async #postVoxJson(path: string, body: unknown, token: string): Promise<unknown> {
-    if (!this.#httpBase) {
-      throw new Error("Vox HTTP base is not configured");
+  #candidateFromSignaling(data: Record<string, unknown>): RTCIceCandidateInit | null {
+    if (!Object.prototype.hasOwnProperty.call(data, "candidate") || data.candidate === null) {
+      return null;
     }
-    const response = await this.#fetch(`${this.#httpBase}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      throw new Error(`Vox request failed: ${response.status} ${await response.text()}`);
+    if (!isRecord(data.candidate) || typeof data.candidate.candidate !== "string") {
+      throw new Error("RTC gateway sent an invalid ICE candidate");
     }
-    if (response.status === 204) {
-      return {};
-    }
-    return response.json();
+    return {
+      candidate: data.candidate.candidate,
+      sdpMid: typeof data.candidate.sdpMid === "string" ? data.candidate.sdpMid : null,
+      sdpMLineIndex: typeof data.candidate.sdpMLineIndex === "number"
+        ? data.candidate.sdpMLineIndex
+        : null,
+      usernameFragment: typeof data.candidate.usernameFragment === "string"
+        ? data.candidate.usernameFragment
+        : null,
+    };
   }
 
-  #closeEventSource(): void {
-    const eventSource = this.#eventSource;
-    this.#eventSource = null;
-    for (const cleanup of this.#eventSourceCleanups.splice(0)) {
-      cleanup();
+  async #flushServerCandidates(): Promise<void> {
+    const pc = this.#peerConnection;
+    if (!pc) return;
+    const candidates = this.#pendingServerCandidates;
+    this.#pendingServerCandidates = [];
+    for (const candidate of candidates) {
+      await pc.addIceCandidate(candidate);
     }
-    if (eventSource) {
-      eventSource.onmessage = null;
-      eventSource.close();
+  }
+
+  #sendLocalCandidate(candidate: RTCIceCandidateInit | null): void {
+    try {
+      this.#signaling?.sendCandidate(candidate);
+    } catch (error) {
+      this.#emit("error", error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  #flushLocalCandidates(): void {
+    const candidates = this.#pendingLocalCandidates;
+    this.#pendingLocalCandidates = [];
+    for (const candidate of candidates) {
+      this.#sendLocalCandidate(candidate);
+    }
+  }
+
+  async #negotiate({ restart }: { restart: boolean }): Promise<void> {
+    const pc = this.#peerConnection;
+    const signaling = this.#signaling;
+    if (!pc || !signaling) {
+      throw new Error("RTC negotiation requires an active peer and signaling session");
+    }
+    if (this.#negotiating) {
+      throw new Error("RTC negotiation is already in progress");
+    }
+
+    this.#negotiating = true;
+    this.#awaitingRemoteDescription = true;
+    this.#bufferLocalCandidates = true;
+    this.#pendingLocalCandidates = [];
+    try {
+      const offer = await pc.createOffer(restart ? { iceRestart: true } : undefined);
+      await pc.setLocalDescription(offer);
+      if (!pc.localDescription?.sdp) {
+        throw new Error("Local SDP offer is missing after setLocalDescription");
+      }
+      const answerPromise = signaling.exchangeOffer(
+        { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+        { restart },
+      );
+      this.#bufferLocalCandidates = false;
+      this.#flushLocalCandidates();
+      const answer = await answerPromise;
+      await pc.setRemoteDescription(answer);
+      this.#awaitingRemoteDescription = false;
+      await this.#flushServerCandidates();
+    } finally {
+      this.#bufferLocalCandidates = false;
+      this.#pendingLocalCandidates = [];
+      this.#awaitingRemoteDescription = false;
+      this.#negotiating = false;
+    }
+  }
+
+  #handleUnexpectedSignalingClose(reason: string): void {
+    if (this.#status === "disconnecting" || this.#status === "closed" || this.#status === "idle") {
+      return;
+    }
+    this.#emit("error", new Error(`RTC gateway closed unexpectedly: ${reason}`));
+    this.#cleanup();
+    this.#setStatus("closed");
   }
 
   #startLocalAudioDucking(stream: MediaStream): void {
@@ -852,7 +799,9 @@ export class VoxRtcBrowserClient {
 
   #cleanup(): void {
     this.#stopAudioDucking({ restoreVolume: true });
-    this.#closeEventSource();
+    const signaling = this.#signaling;
+    this.#signaling = null;
+    signaling?.close("client_cleanup");
 
     const dataChannel = this.#dataChannel;
     this.#dataChannel = null;
@@ -893,9 +842,11 @@ export class VoxRtcBrowserClient {
     peerConnection?.close();
 
     this.#session = null;
-    this.#httpBase = null;
-    this.#mediaToken = null;
-    this.#pendingCandidates = [];
+    this.#pendingLocalCandidates = [];
+    this.#pendingServerCandidates = [];
+    this.#bufferLocalCandidates = false;
+    this.#negotiating = false;
+    this.#awaitingRemoteDescription = false;
     if (this.#audioElement) {
       this.#audioElement.pause();
       this.#audioElement.srcObject = null;

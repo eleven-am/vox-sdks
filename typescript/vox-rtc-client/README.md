@@ -1,16 +1,8 @@
 # `@eleven-am/vox-rtc-client`
 
-Browser-side SDK for Vox-hosted WebRTC media sessions.
-
-This package is for frontend applications that need to:
-
-- join a Vox RTC session with WebRTC
-- capture microphone audio
-- receive remote assistant audio
-- handle Vox ICE candidate exchange
-- send and receive app events over the Vox data channel
-
-It does not hold a Vox API key. Create the RTC session from your backend with `@eleven-am/vox-rtc-server`, then pass the returned bootstrap to this browser client.
+Browser WebRTC client for Vox conversations. It captures microphone audio,
+plays assistant audio, performs full-trickle ICE, and receives Vox control
+events through one application-owned signaling endpoint.
 
 ## Install
 
@@ -18,113 +10,111 @@ It does not hold a Vox API key. Create the RTC session from your backend with `@
 npm install @eleven-am/vox-rtc-client
 ```
 
-## Example
+## Connect
 
 ```ts
 import { VoxRtcBrowserClient } from "@eleven-am/vox-rtc-client";
 
-const audio = document.querySelector("audio")!;
-
 const client = new VoxRtcBrowserClient({
-  sessionEndpoint: "/api/rtc/session",
-  audioElement: audio,
-  audioDucking: {
-    duckVolume: 0.2,
-    sustainedVolume: 0.05
-  }
+  signalingEndpoint: "/api/vox/rtc",
+  audioElement: document.querySelector("audio")!,
+  audioConstraints: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+  audioDucking: true,
 });
 
 client.on("state", (state) => {
-  console.log(state.status, state.peerConnectionState, state.dataChannelState);
+  console.log(state.status, state.peerConnectionState, state.iceConnectionState);
 });
 
-client.onClientEvent((message) => {
-  console.log("server event", message.event, message.payload);
+client.on("signalingMessage", (event) => {
+  if (event.type === "conversation.item.input_audio_transcription.completed") {
+    console.log("user said", event.data.transcript);
+  }
+});
+
+client.onClientEvent((event) => {
+  console.log("server event", event.event, event.payload);
 });
 
 await client.connect();
+```
 
-client.sendEvent({
-  event: "ui.select",
-  payload: { id: "choice-a" }
+`signalingEndpoint` must be a same-origin path. Direct Vox URLs, direct session
+bootstraps, route collections, and EventSource control bridges are not supported.
+
+## Signaling and media
+
+The client opens one WebSocket to the application gateway. It sends the SDP
+offer, each local ICE candidate, and explicit end-of-candidates as they become
+available. Vox's answer and candidates arrive over the same socket. Candidates
+that arrive before the matching answer are buffered and applied in order.
+
+After negotiation, media flows directly between the browser and Vox. The
+application gateway does not relay audio.
+
+Use a real ICE restart when the network path changes:
+
+```ts
+await client.restartIce();
+```
+
+Only one negotiation may run at a time. A failed restart closes the signaling
+session and media rather than leaving a partially controlled call alive.
+
+## Application events
+
+Server-to-browser events sent by the server session's `sendClientEvent` arrive
+over the WebRTC data channel:
+
+```ts
+client.onClientEvent(({ event, payload }) => {
+  console.log(event, payload);
 });
 ```
 
-`onClientEvent` receives events the backend sent with `sendClientEvent`.
-`sendEvent` sends browser-originated app events to the backend as `browser.event`.
-
-## Session Sources
-
-Use one of:
+Browser-to-server events use the same data channel and arrive on the server as
+`browser.event`:
 
 ```ts
-new VoxRtcBrowserClient({ sessionEndpoint: "/api/rtc/session" });
+client.sendEvent({ event: "ui.select", payload: { id: "choice-a" } });
 ```
 
-```ts
-new VoxRtcBrowserClient({
-  session: async () => {
-    const response = await fetch("/api/rtc/session", { method: "POST" });
-    return response.json();
-  }
-});
-```
+## Audio ducking
+
+Audio ducking changes playback volume while Vox decides whether detected speech
+is a real interruption. Vox remains authoritative for VAD, interruption, and
+response cancellation.
 
 ```ts
-new VoxRtcBrowserClient({
-  httpBase: "https://vox.example.com",
-  session: {
-    sessionId: "...",
-    clientToken: "...",
-    iceServers: []
-  }
-});
-```
-
-The first two shapes are preferred for real apps because the backend can keep `VOX_API_KEY` private.
-
-## Audio Ducking
-
-Pass `audioDucking: true` or an options object to lower the provided audio element while Vox decides whether to interrupt the assistant. This is client-side UX only; Vox still owns VAD, interruption detection, and response cancellation.
-
-By default, ducking follows Vox control events. Your backend should forward the relevant Vox events to the browser, then call `client.handleControlEvent(event)`. If your backend exposes those events as a JSON server-event stream, use `bindControlEventSource`.
-
-```ts
-new VoxRtcBrowserClient({
-  sessionEndpoint: "/api/rtc/session",
-  audioElement: audio,
+const client = new VoxRtcBrowserClient({
+  signalingEndpoint: "/api/vox/rtc",
+  audioElement,
   audioDucking: {
-    threshold: 0.035,
+    mode: "vox",
     duckVolume: 0.2,
     sustainedVolume: 0.05,
     sustainedAfterMs: 700,
-    releaseDelayMs: 350
-  }
+    releaseDelayMs: 350,
+  },
 });
 ```
 
-```ts
-// from your app's server-events/WebSocket bridge
-client.handleControlEvent({
-  type: "input_audio_buffer.speech_started"
-});
-```
+Modes:
 
-```ts
-const stopControlEvents = client.bindControlEventSource(
-  `/api/rtc/session/${sessionId}/events`
-);
+- `vox`: follow authoritative Vox speech and interruption events
+- `local`: react immediately to microphone level, with possible speaker leakage
+- `hybrid`: react locally, then retain ducking only when Vox confirms speech
 
-// later
-stopControlEvents();
-```
+The gateway already forwards the required Vox events. Applications do not need
+another SSE or WebSocket connection.
 
-`response.audio.clear` is treated as a ducking release signal. It does not remove
-or stop Vox media by itself; pause or reset your own `<audio>` element if your app
-wants visible playback controls to reflect the clear event immediately.
+## Private data
 
-Supported modes:
-
-- `vox`: duck only when your app forwards Vox control events. This avoids self-ducking from speaker leakage.
-- `local`: duck immediately from local microphone level. This is fastest but can self-duck if echo cancellation leaks assistant audio into the mic.
-- `hybrid`: duck immediately from local microphone level, then hold only if Vox confirms speech through forwarded control events.
+The opaque gateway capability is held inside the SDK. Session objects exposed
+to application code contain only the session ID, ICE servers, and expiry
+metadata. The client rejects gateway responses containing Vox tokens, internal
+URLs, or other private connection fields.

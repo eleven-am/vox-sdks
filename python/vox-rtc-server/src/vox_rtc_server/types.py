@@ -31,10 +31,23 @@ class RTCIceServer:
 @dataclass(slots=True)
 class SessionBootstrap:
     session_id: str
-    client_token: str
     expires_at: str
-    join_token_ttl_seconds: int
+    attach_ttl_seconds: int
     ice_servers: list[RTCIceServer] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RtcSessionDescription:
+    type: str
+    sdp: str
+
+
+@dataclass(slots=True)
+class RtcIceCandidate:
+    candidate: str
+    sdp_mid: str | None = None
+    sdp_m_line_index: int | None = None
+    username_fragment: str | None = None
 
 
 @dataclass(slots=True)
@@ -196,9 +209,13 @@ class SocketChannelLike(Protocol):
 
     def leave(self) -> None: ...
 
-    def send_message(self, event: str, payload: Mapping[str, Any] | None = None) -> None: ...
+    def send_message(
+        self, event: str, payload: dict[str, Any] | None = None
+    ) -> None: ...
 
-    def on_message(self, callback: Callable[[ServerMessageLike], None]) -> Unsubscribe: ...
+    def on_message(
+        self, callback: Callable[[ServerMessageLike], None]
+    ) -> Unsubscribe: ...
 
     def on_message_event(
         self, event_name: str, callback: Callable[[ServerMessageLike], None]
@@ -217,7 +234,7 @@ class SocketClientLike(Protocol):
     def get_state(self) -> Any: ...
 
     def create_channel(
-        self, name: str, params: Mapping[str, Any] | None = None
+        self, name: str, params: dict[str, Any] | None = None
     ) -> SocketChannelLike: ...
 
     def on_connection_change(self, callback: Callable[[Any], None]) -> Unsubscribe: ...

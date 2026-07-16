@@ -4,9 +4,8 @@ export { ChannelState, ConnectionState };
 
 export interface VoxRtcSessionBootstrap {
   sessionId: string;
-  clientToken: string;
   expiresAt: string;
-  joinTokenTtlSeconds: number;
+  attachTtlSeconds: number;
   iceServers: RTCIceServerLike[];
 }
 
@@ -14,6 +13,18 @@ export interface RTCIceServerLike {
   urls: string | string[];
   username?: string;
   credential?: string;
+}
+
+export interface VoxRtcSessionDescription {
+  type: "offer" | "answer";
+  sdp: string;
+}
+
+export interface VoxRtcIceCandidate {
+  candidate: string;
+  sdpMid?: string | null;
+  sdpMLineIndex?: number | null;
+  usernameFragment?: string | null;
 }
 
 export interface VoxRtcSessionConfig {
@@ -145,6 +156,10 @@ export interface VoxRtcResponseOptions {
 
 export interface VoxRtcSessionOptions {
   joinTimeoutMs?: number;
+}
+
+export interface VoxRtcOfferOptions {
+  restart?: boolean;
 }
 
 export type Unsubscribe = () => void;

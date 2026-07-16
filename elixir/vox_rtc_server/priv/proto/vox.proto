@@ -1,0 +1,599 @@
+syntax = "proto3";
+package vox;
+
+import "google/protobuf/struct.proto";
+
+service HealthService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc ListLoaded(ListLoadedRequest) returns (ListLoadedResponse);
+}
+
+service ModelService {
+  rpc Pull(PullRequest) returns (stream PullProgress);
+  rpc List(ListModelsRequest) returns (ListModelsResponse);
+  rpc Show(ShowRequest) returns (ShowResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
+
+service TranscriptionService {
+  rpc Transcribe(TranscribeRequest) returns (TranscribeResponse);
+  rpc Annotate(AnnotateRequest) returns (AnnotateResponse);
+}
+
+service SynthesisService {
+  rpc Synthesize(SynthesizeRequest) returns (stream AudioChunk);
+  rpc ListVoices(ListVoicesRequest) returns (ListVoicesResponse);
+  rpc CreateVoice(CreateVoiceRequest) returns (CreateVoiceResponse);
+  rpc DeleteVoice(DeleteVoiceRequest) returns (DeleteVoiceResponse);
+}
+
+message HealthRequest {}
+message HealthResponse {
+  string status = 1;
+}
+
+message ListLoadedRequest {}
+message ListLoadedResponse {
+  repeated LoadedModel models = 1;
+}
+
+message LoadedModel {
+  string name = 1;
+  string tag = 2;
+  string type = 3;
+  string device = 4;
+  int64 vram_bytes = 5;
+  double loaded_at = 6;
+  double last_used = 7;
+  int32 ref_count = 8;
+}
+
+message PullRequest {
+  string name = 1;
+  string variant = 2;
+}
+
+message PullProgress {
+  string status = 1;
+  string error = 2;
+  int32 completed = 3;
+  int32 total = 4;
+}
+
+message ListModelsRequest {}
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+message ModelInfo {
+  string name = 1;
+  string type = 2;
+  string format = 3;
+  string architecture = 4;
+  int64 size_bytes = 5;
+  string description = 6;
+}
+
+message ShowRequest {
+  string name = 1;
+}
+
+message ShowResponse {
+  string name = 1;
+  map<string, string> config = 2;
+  repeated LayerInfo layers = 3;
+}
+
+message LayerInfo {
+  string media_type = 1;
+  string digest = 2;
+  int64 size = 3;
+  string filename = 4;
+}
+
+message DeleteRequest {
+  string name = 1;
+}
+
+message DeleteResponse {
+  string status = 1;
+}
+
+message TranscribeRequest {
+  bytes audio = 1;
+  string model = 2;
+  string language = 3;
+  bool word_timestamps = 4;
+  float temperature = 5;
+  string response_format = 6;
+  string format_hint = 7;
+}
+
+message TranscribeResponse {
+  string model = 1;
+  string text = 2;
+  string language = 3;
+  int32 duration_ms = 4;
+  int32 processing_ms = 5;
+  repeated TranscriptSegment segments = 6;
+  repeated Entity entities = 7;
+  repeated string topics = 8;
+}
+
+message Entity {
+  string type = 1;
+  string text = 2;
+  uint32 start_char = 3;
+  uint32 end_char = 4;
+}
+
+message AnnotateRequest {
+  string text = 1;
+  string language = 2;
+}
+
+message AnnotateResponse {
+  repeated Entity entities = 1;
+  repeated string topics = 2;
+}
+
+message TranscriptSegment {
+  string text = 1;
+  int32 start_ms = 2;
+  int32 end_ms = 3;
+  repeated WordTimestamp words = 4;
+}
+
+message WordTimestamp {
+  string word = 1;
+  int32 start_ms = 2;
+  int32 end_ms = 3;
+  optional float confidence = 4;
+}
+
+message SynthesizeRequest {
+  string model = 1;
+  string input = 2;
+  string voice = 3;
+  float speed = 4;
+  string language = 5;
+  string response_format = 6;
+  google.protobuf.Struct params = 7;
+}
+
+message AudioChunk {
+  bytes audio = 1;
+  int32 sample_rate = 2;
+  bool is_final = 3;
+}
+
+service StreamingService {
+  rpc StreamTranscribe(stream StreamInput) returns (stream StreamOutput);
+}
+
+message StreamInput {
+  oneof msg {
+    StreamConfig config = 1;
+    AudioFrame audio = 2;
+    OpusFrame opus_frame = 3;
+    EncodedAudioFrame encoded_audio = 4;
+    EndOfStream end_of_stream = 5;
+  }
+}
+
+message EndOfStream {}
+
+message StreamConfig {
+  string language = 1;
+  uint32 sample_rate = 2;
+  string model = 3;
+  bool partials = 4;
+  uint32 partial_window_ms = 5;
+  uint32 partial_stride_ms = 6;
+  bool include_word_timestamps = 7;
+  float temperature = 8;
+}
+
+message AudioFrame {
+  bytes pcm16 = 1;
+  uint32 sample_rate = 2;
+}
+
+message OpusFrame {
+  bytes data = 1;
+  uint32 sample_rate = 2;
+  uint32 channels = 3;
+}
+
+message EncodedAudioFrame {
+  bytes data = 1;
+  string format = 2;
+}
+
+message StreamOutput {
+  oneof msg {
+    StreamReady ready = 1;
+    StreamSpeechStarted speech_started = 2;
+    StreamSpeechStopped speech_stopped = 3;
+    StreamTranscriptResult transcript = 4;
+    StreamErrorMessage error = 5;
+  }
+}
+
+message StreamReady {}
+
+message StreamSpeechStarted {
+  uint32 timestamp_ms = 1;
+}
+
+message StreamSpeechStopped {
+  uint32 timestamp_ms = 1;
+}
+
+message StreamTranscriptResult {
+  string text = 1;
+  bool is_partial = 2;
+  uint32 start_ms = 3;
+  uint32 end_ms = 4;
+  uint32 audio_duration_ms = 5;
+  uint32 processing_duration_ms = 6;
+  string model = 7;
+  optional float eou_probability = 8;
+  repeated Entity entities = 9;
+  repeated string topics = 10;
+  repeated WordTimestamp words = 11;
+  repeated TranscriptSegment segments = 12;
+}
+
+message StreamErrorMessage {
+  string message = 1;
+}
+
+message ListVoicesRequest {
+  string model = 1;
+}
+
+message ListVoicesResponse {
+  repeated VoiceInfo voices = 1;
+}
+
+message CreateVoiceRequest {
+  string name = 1;
+  bytes audio = 2;
+  string language = 3;
+  string gender = 4;
+  string reference_text = 5;
+  string format_hint = 6;
+}
+
+message CreateVoiceResponse {
+  VoiceInfo voice = 1;
+  int64 created_at = 2;
+}
+
+message DeleteVoiceRequest {
+  string id = 1;
+}
+
+message DeleteVoiceResponse {
+  string id = 1;
+  bool deleted = 2;
+}
+
+message VoiceInfo {
+  string id = 1;
+  string name = 2;
+  string language = 3;
+  string gender = 4;
+  string description = 5;
+  bool is_cloned = 6;
+  string model = 7;
+}
+
+// ---------------------------------------------------------------------------
+// ConversationService: bidi streaming for agent-facing voice orchestration.
+// The agent (any language) terminates WebRTC/SIP/etc. on its own and streams
+// PCM into Vox; Vox runs VAD+STT+EOU+state-machine+TTS and streams back
+// transcripts, state changes, and synthesized audio.
+// ---------------------------------------------------------------------------
+
+service ConversationService {
+  rpc Converse(stream ConverseClientMessage) returns (stream ConverseServerMessage);
+}
+
+service RtcService {
+  rpc CreateSession(RtcCreateSessionRequest) returns (RtcSessionBootstrap);
+  rpc Control(stream RtcControlClientMessage) returns (stream RtcControlServerMessage);
+}
+
+message RtcCreateSessionRequest {
+  optional bool browser_events = 1;
+}
+
+message RtcIceServer {
+  repeated string urls = 1;
+  string username = 2;
+  string credential = 3;
+}
+
+message RtcSessionBootstrap {
+  string session_id = 1;
+  reserved 2, 4;
+  reserved "client_token", "join_token_ttl_seconds";
+  string expires_at = 3;
+  repeated RtcIceServer ice_servers = 5;
+  uint32 attach_ttl_seconds = 6;
+}
+
+message RtcSessionDescription {
+  string type = 1;
+  string sdp = 2;
+}
+
+message RtcControlAnswer {
+  string session_id = 1;
+  RtcSessionDescription answer = 2;
+}
+
+message RtcIceCandidate {
+  string candidate = 1;
+  optional string sdp_mid = 2;
+  optional uint32 sdp_m_line_index = 3;
+  optional string username_fragment = 4;
+}
+
+message RtcIceCandidatesComplete {}
+
+message RtcControlOffer {
+  RtcSessionDescription offer = 1;
+  bool restart = 2;
+}
+
+message RtcControlClose {
+  string reason = 1;
+}
+
+message RtcControlClosed {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message RtcSignalingError {
+  string message = 1;
+}
+
+message RtcWireEvent {
+  string type = 1;
+  string payload_json = 2;
+}
+
+message ConverseClientMessage {
+  oneof msg {
+    ConversationSessionUpdate session_update = 1;
+    ConversationAudioAppend audio_append = 2;
+    // field 3 reserved (was ConversationResponseCreate — superseded by start/delta/commit)
+    ConversationResponseCancel response_cancel = 4;
+    ConversationResponseStart response_start = 5;
+    ConversationResponseDelta response_delta = 6;
+    ConversationResponseCommit response_commit = 7;
+    ConversationResponseReplaceText response_replace_text = 8;
+  }
+  reserved 3;
+  reserved "response_create";
+}
+
+message RtcControlClientMessage {
+  oneof msg {
+    RtcControlAttach attach = 1;
+    ConversationSessionUpdate session_update = 2;
+    // field 3 reserved (was ConversationResponseCreate — superseded by start/delta/commit)
+    ConversationResponseCancel response_cancel = 4;
+    ConversationResponseStart response_start = 5;
+    ConversationResponseDelta response_delta = 6;
+    ConversationResponseCommit response_commit = 7;
+    RtcClientEvent client_event = 8;
+    ConversationResponseReplaceText response_replace_text = 9;
+    RtcControlOffer offer = 10;
+    RtcIceCandidate candidate = 11;
+    RtcIceCandidatesComplete candidates_complete = 12;
+    RtcControlClose close = 13;
+  }
+  reserved 3;
+  reserved "response_create";
+}
+
+message RtcControlServerMessage {
+  oneof msg {
+    RtcSessionAttached attached = 1;
+    RtcControlAnswer answer = 2;
+    RtcIceCandidate candidate = 3;
+    RtcIceCandidatesComplete candidates_complete = 4;
+    ConverseServerMessage conversation = 5;
+    RtcSignalingError error = 6;
+    RtcControlClosed closed = 7;
+    RtcClientEvent browser_event = 8;
+    RtcWireEvent event = 9;
+  }
+}
+
+message RtcControlAttach {
+  string session_id = 1;
+}
+
+message ConverseServerMessage {
+  oneof msg {
+    ConversationSessionCreated session_created = 1;
+    ConversationSpeechStarted speech_started = 2;
+    ConversationSpeechStopped speech_stopped = 3;
+    ConversationTranscriptDone transcript_done = 4;
+    ConversationResponseCreated response_created = 5;
+    ConversationAudioDelta audio_delta = 6;
+    ConversationResponseDone response_done = 7;
+    ConversationResponseCancelled response_cancelled = 8;
+    ConversationStateChanged state_changed = 9;
+    ConversationError error = 10;
+    ConversationResponseCommitted response_committed = 11;
+    ConversationAudioClear audio_clear = 12;
+    ConversationInterruptionDetected interruption_detected = 13;
+    ConversationInterruptionFalsePositive interruption_false_positive = 14;
+    ConversationTurnEouPredicted turn_eou_predicted = 15;
+    ConversationTranscriptDelta transcript_delta = 18;
+  }
+  reserved 16, 17;
+  reserved "rtc_session_attached", "client_event";
+}
+
+message RtcSessionAttached {
+  string session_id = 1;
+  string provider = 2;
+}
+
+message RtcClientEvent {
+  string event = 1;
+  string payload_json = 2;
+}
+
+message ConversationResponseCommitted {
+  string response_id = 1;
+}
+
+message ConversationTurnPolicy {
+  optional bool allow_interrupt_while_speaking = 1;
+  optional uint32 min_interrupt_duration_ms = 2;
+  optional uint32 max_endpointing_delay_ms = 3;
+  optional uint32 stable_speaking_min_ms = 4;
+  optional uint32 false_interruption_timeout_ms = 5;
+  optional uint32 min_interrupt_words = 6;
+  optional bool partial_interrupts = 7;
+  optional bool dynamic_endpointing = 8;
+  optional uint32 min_endpointing_delay_ms = 9;
+  optional uint32 speaking_interrupt_min_duration_ms = 10;
+  optional uint32 speaking_interrupt_min_words = 11;
+  optional uint32 self_echo_min_words = 12;
+  optional float self_echo_min_overlap = 13;
+  optional uint32 aec_warmup_ms = 14;
+  optional uint32 backchannel_end_cooldown_ms = 15;
+  optional uint32 vad_min_silence_ms = 16;
+}
+
+message ConversationSessionUpdate {
+  string stt_model = 1;
+  string tts_model = 2;
+  string voice = 3;
+  string language = 4;
+  uint32 sample_rate = 5;
+  ConversationTurnPolicy policy = 6;
+  string vad_backend = 7;
+  string turn_detector = 8;
+  string turn_profile = 9;
+  bool include_word_timestamps = 10;
+}
+
+message ConversationAudioAppend {
+  bytes pcm16 = 1;
+  uint32 sample_rate = 2;
+}
+
+message ConversationResponseStart {
+  optional bool allow_interruptions = 1;
+}
+
+message ConversationResponseDelta {
+  string delta = 1;
+  optional bool allow_interruptions = 2;
+}
+
+message ConversationResponseCommit {}
+
+message ConversationResponseCancel {}
+
+message ConversationResponseReplaceText {
+  string text = 1;
+  optional bool allow_interruptions = 2;
+}
+
+message ConversationSessionCreated {
+  string turn_profile = 1;
+  ConversationTurnPolicy policy = 2;
+}
+
+message ConversationSpeechStarted {
+  uint32 timestamp_ms = 1;
+}
+
+message ConversationSpeechStopped {
+  uint32 timestamp_ms = 1;
+}
+
+message ConversationTranscriptDelta {
+  string delta = 1;
+  uint32 start_ms = 2;
+  uint32 end_ms = 3;
+}
+
+message ConversationTranscriptDone {
+  string transcript = 1;
+  string language = 2;
+  uint32 start_ms = 3;
+  uint32 end_ms = 4;
+  optional float eou_probability = 5;
+  repeated Entity entities = 6;
+  repeated string topics = 7;
+  repeated WordTimestamp words = 8;
+}
+
+message ConversationResponseCreated {
+  string response_id = 1;
+}
+
+message ConversationAudioDelta {
+  bytes audio = 1;
+  uint32 sample_rate = 2;
+  string response_id = 3;
+  uint32 sequence = 4;
+}
+
+message ConversationAudioClear {
+  string response_id = 1;
+}
+
+message ConversationInterruptionDetected {
+  string response_id = 1;
+  uint32 vad_active_ms = 2;
+  string partial_transcript = 3;
+}
+
+message ConversationInterruptionFalsePositive {
+  string response_id = 1;
+  uint32 vad_active_ms = 2;
+  string partial_transcript = 3;
+  string reason = 4;
+}
+
+message ConversationTurnEouPredicted {
+  float probability = 1;
+  float threshold = 2;
+  string decision = 3;
+  string action = 4;
+  uint32 delay_ms = 5;
+  string turn_detector = 6;
+  uint32 start_ms = 7;
+  uint32 end_ms = 8;
+}
+
+message ConversationResponseDone {
+  string response_id = 1;
+}
+
+message ConversationResponseCancelled {
+  string response_id = 1;
+}
+
+message ConversationStateChanged {
+  string state = 1;
+  string previous_state = 2;
+}
+
+message ConversationError {
+  string message = 1;
+}

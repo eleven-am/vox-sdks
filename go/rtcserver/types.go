@@ -31,11 +31,22 @@ type RTCIceServer struct {
 }
 
 type SessionBootstrap struct {
-	SessionID           string         `json:"session_id"`
-	ClientToken         string         `json:"client_token"`
-	ExpiresAt           string         `json:"expires_at"`
-	JoinTokenTTLSeconds int            `json:"join_token_ttl_seconds"`
-	ICEServers          []RTCIceServer `json:"ice_servers"`
+	SessionID        string         `json:"session_id"`
+	ExpiresAt        string         `json:"expires_at"`
+	AttachTTLSeconds int            `json:"attach_ttl_seconds"`
+	ICEServers       []RTCIceServer `json:"ice_servers"`
+}
+
+type RTCSessionDescription struct {
+	Type string
+	SDP  string
+}
+
+type RTCIceCandidate struct {
+	Candidate        string
+	SDPMid           *string
+	SDPMLineIndex    *uint32
+	UsernameFragment *string
 }
 
 type SessionConfig struct {

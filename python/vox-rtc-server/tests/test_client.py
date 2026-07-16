@@ -26,7 +26,9 @@ class FakeChannel:
         self.sent: list[tuple[str, dict[str, Any]]] = []
         self.state_handlers: list[Callable[[Any], None]] = []
         self.message_handlers: list[Callable[[FakeServerMessage], None]] = []
-        self.message_event_handlers: dict[str, list[Callable[[FakeServerMessage], None]]] = {}
+        self.message_event_handlers: dict[
+            str, list[Callable[[FakeServerMessage], None]]
+        ] = {}
         self.join_state: ChannelState = ChannelState.JOINED
         self.join_error: str = ""
 
@@ -37,10 +39,14 @@ class FakeChannel:
     def leave(self) -> None:
         return None
 
-    def send_message(self, event: str, payload: Mapping[str, Any] | None = None) -> None:
+    def send_message(
+        self, event: str, payload: Mapping[str, Any] | None = None
+    ) -> None:
         self.sent.append((event, dict(payload or {})))
 
-    def on_message(self, callback: Callable[[FakeServerMessage], None]) -> Callable[[], None]:
+    def on_message(
+        self, callback: Callable[[FakeServerMessage], None]
+    ) -> Callable[[], None]:
         self.message_handlers.append(callback)
         return lambda: self.message_handlers.remove(callback)
 
@@ -51,7 +57,9 @@ class FakeChannel:
         handlers.append(callback)
         return lambda: handlers.remove(callback)
 
-    def on_channel_state_change(self, callback: Callable[[Any], None]) -> Callable[[], None]:
+    def on_channel_state_change(
+        self, callback: Callable[[Any], None]
+    ) -> Callable[[], None]:
         self.state_handlers.append(callback)
         return lambda: self.state_handlers.remove(callback)
 
@@ -83,11 +91,15 @@ class FakeSocket:
     def get_state(self) -> ConnectionState:
         return self.state
 
-    def create_channel(self, name: str, params: Mapping[str, Any] | None = None) -> FakeChannel:
+    def create_channel(
+        self, name: str, params: Mapping[str, Any] | None = None
+    ) -> FakeChannel:
         assert name == "/rtc/rtc_123"
         return self.channel
 
-    def on_connection_change(self, callback: Callable[[Any], None]) -> Callable[[], None]:
+    def on_connection_change(
+        self, callback: Callable[[Any], None]
+    ) -> Callable[[], None]:
         self.connection_handlers.append(callback)
         return lambda: self.connection_handlers.remove(callback)
 
@@ -124,9 +136,8 @@ def test_create_session_parses_the_rtc_bootstrap_response(monkeypatch: Any) -> N
             200,
             {
                 "session_id": "rtc_123",
-                "client_token": "tok_123",
                 "expires_at": "2026-01-01T00:00:00Z",
-                "join_token_ttl_seconds": 120,
+                "attach_ttl_seconds": 120,
                 "ice_servers": [{"urls": ["stun:turn.example.com:3478"]}],
             },
         )
@@ -140,8 +151,7 @@ def test_create_session_parses_the_rtc_bootstrap_response(monkeypatch: Any) -> N
     bootstrap = asyncio.run(client.create_session())
 
     assert bootstrap.session_id == "rtc_123"
-    assert bootstrap.client_token == "tok_123"
-    assert bootstrap.join_token_ttl_seconds == 120
+    assert bootstrap.attach_ttl_seconds == 120
     assert client.http_base == "https://vox.example.com"
     assert client.socket_base == "https://vox.example.com/v1/socket"
 
@@ -152,7 +162,8 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
     client = VoxRtcServerClient(
         http_base="https://vox.example.com",
         api_key="secret",
-        socket_factory=lambda _endpoint, params, *_args: captured_params.update(params) or fake_socket,
+        socket_factory=lambda _endpoint, params, *_args: captured_params.update(params)
+        or fake_socket,
     )
 
     session = asyncio.run(client.attach_session("rtc_123", join_timeout=2.5))

@@ -29,9 +29,8 @@ function defaultApiKey(): string | null {
 function toBootstrap(data: Record<string, unknown>): VoxRtcSessionBootstrap {
   return {
     sessionId: String(data.session_id),
-    clientToken: String(data.client_token),
     expiresAt: String(data.expires_at),
-    joinTokenTtlSeconds: Number(data.join_token_ttl_seconds ?? 0),
+    attachTtlSeconds: Number(data.attach_ttl_seconds ?? 0),
     iceServers: Array.isArray(data.ice_servers) ? data.ice_servers as VoxRtcSessionBootstrap["iceServers"] : [],
   };
 }

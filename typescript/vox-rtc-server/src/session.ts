@@ -9,11 +9,14 @@ import type {
   VoxRtcClientEventEnvelope,
   VoxRtcErrorEvent,
   VoxRtcInterruptionEvent,
+  VoxRtcIceCandidate,
+  VoxRtcOfferOptions,
   VoxRtcResponseEvent,
   VoxRtcResponseOptions,
   VoxRtcSessionAttachedEvent,
   VoxRtcSessionConfig,
   VoxRtcSessionCreatedEvent,
+  VoxRtcSessionDescription,
   VoxRtcSpeechEvent,
   VoxRtcTranscriptDeltaEvent,
   VoxRtcTranscriptEvent,
@@ -33,6 +36,9 @@ const EVT_RESPONSE_COMMITTED = "response.committed";
 const EVT_RESPONSE_CREATED = "response.created";
 const EVT_RESPONSE_DONE = "response.done";
 const EVT_RTC_SESSION_ATTACHED = "rtc.session.attached";
+const EVT_RTC_ANSWER = "rtc.answer";
+const EVT_RTC_ICE_CANDIDATE = "rtc.ice_candidate";
+const EVT_RTC_SESSION_CLOSED = "rtc.session.closed";
 const EVT_SESSION_CREATED = "session.created";
 const EVT_SPEECH_STARTED = "input_audio_buffer.speech_started";
 const EVT_SPEECH_STOPPED = "input_audio_buffer.speech_stopped";
@@ -278,6 +284,52 @@ export class VoxRtcControlSession {
     });
   }
 
+  onAnswer(handler: (answer: VoxRtcSessionDescription) => void): Unsubscribe {
+    return this.on(EVT_RTC_ANSWER, (payload) => {
+      const answer = payload.answer;
+      if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
+        return;
+      }
+      const record = answer as Record<string, unknown>;
+      if (record.type === "answer" && typeof record.sdp === "string") {
+        handler({ type: "answer", sdp: record.sdp });
+      }
+    });
+  }
+
+  onIceCandidate(handler: (candidate: VoxRtcIceCandidate | null) => void): Unsubscribe {
+    return this.on(EVT_RTC_ICE_CANDIDATE, (payload) => {
+      const value = payload.candidate;
+      if (value === null || value === undefined) {
+        handler(null);
+        return;
+      }
+      if (typeof value !== "object" || Array.isArray(value)) {
+        return;
+      }
+      const candidate = value as Record<string, unknown>;
+      if (typeof candidate.candidate !== "string") {
+        return;
+      }
+      handler({
+        candidate: candidate.candidate,
+        sdpMid: typeof candidate.sdpMid === "string" ? candidate.sdpMid : null,
+        sdpMLineIndex: typeof candidate.sdpMLineIndex === "number"
+          ? candidate.sdpMLineIndex
+          : null,
+        usernameFragment: typeof candidate.usernameFragment === "string"
+          ? candidate.usernameFragment
+          : null,
+      });
+    });
+  }
+
+  onSessionClosed(handler: (event: VoxRtcCloseEvent) => void): Unsubscribe {
+    return this.on(EVT_RTC_SESSION_CLOSED, (payload) => {
+      handler(closeEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
   onTranscript(handler: (event: VoxRtcTranscriptEvent) => void): Unsubscribe {
     return this.on(EVT_TRANSCRIPT_COMPLETED, (payload) => {
       handler({
@@ -396,6 +448,33 @@ export class VoxRtcControlSession {
 
   sendControl(type: string, payload: Record<string, unknown> = {}): void {
     this.#channel.sendMessage(type, payload);
+  }
+
+  sendOffer(offer: VoxRtcSessionDescription, options?: VoxRtcOfferOptions): void {
+    if (offer.type !== "offer" || !offer.sdp.trim()) {
+      throw new Error("RTC offer requires a non-empty SDP offer");
+    }
+    this.sendControl("rtc.offer", {
+      offer: { type: offer.type, sdp: offer.sdp },
+      restart: options?.restart === true,
+    });
+  }
+
+  sendIceCandidate(candidate: VoxRtcIceCandidate | null): void {
+    this.sendControl("rtc.ice_candidate", {
+      candidate: candidate === null
+        ? null
+        : {
+            candidate: candidate.candidate,
+            sdpMid: candidate.sdpMid ?? null,
+            sdpMLineIndex: candidate.sdpMLineIndex ?? null,
+            usernameFragment: candidate.usernameFragment ?? null,
+          },
+    });
+  }
+
+  closeRtc(reason = "client_closed"): void {
+    this.sendControl("rtc.close", { reason });
   }
 
   configure(config: VoxRtcSessionConfig): void {

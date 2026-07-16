@@ -38,9 +38,8 @@ def _to_bootstrap(data: Mapping[str, Any]) -> SessionBootstrap:
     ]
     return SessionBootstrap(
         session_id=str(data["session_id"]),
-        client_token=str(data["client_token"]),
         expires_at=str(data["expires_at"]),
-        join_token_ttl_seconds=int(data.get("join_token_ttl_seconds", 0)),
+        attach_ttl_seconds=int(data.get("attach_ttl_seconds", 0)),
         ice_servers=ice_servers,
     )
 
@@ -99,10 +98,14 @@ class VoxRtcServerClient:
         urlopen_impl: Any = urlopen,
     ) -> None:
         self._http_base = _normalize_base(http_base)
-        resolved_api_key = (api_key if api_key is not None else os.environ.get("VOX_API_KEY", "")).strip()
+        resolved_api_key = (
+            api_key if api_key is not None else os.environ.get("VOX_API_KEY", "")
+        ).strip()
         self._api_key = resolved_api_key or None
         self._socket_base = (
-            _normalize_base(socket_base) if socket_base else _default_socket_base(http_base)
+            _normalize_base(socket_base)
+            if socket_base
+            else _default_socket_base(http_base)
         )
         merged_socket_params = dict(socket_params or {})
         if self._api_key:
@@ -215,8 +218,14 @@ class VoxRtcServerClient:
         if self._api_key:
             request.add_header("authorization", f"Bearer {self._api_key}")
         with self._urlopen(request, timeout=self._request_timeout) as response:
-            status = int(response.status) if hasattr(response, "status") else int(response.getcode())
+            status = (
+                int(response.status)
+                if hasattr(response, "status")
+                else int(response.getcode())
+            )
             body = response.read().decode("utf-8")
         if status < 200 or status >= 300:
-            raise RuntimeError(f"Failed to create Vox RTC session: {status} {body.strip()}")
+            raise RuntimeError(
+                f"Failed to create Vox RTC session: {status} {body.strip()}"
+            )
         return _to_bootstrap(json.loads(body))

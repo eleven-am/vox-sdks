@@ -1,19 +1,15 @@
 export interface VoxRtcBrowserSessionBootstrap {
   sessionId: string;
-  clientToken: string;
   iceServers: RTCIceServer[];
-  voxHttpBase?: string;
   expiresAt?: string;
-  joinTokenTtlSeconds?: number;
+  attachTtlSeconds?: number;
 }
 
 export interface VoxRtcBrowserClientOptions {
-  httpBase?: string;
-  session?: VoxRtcBrowserSessionBootstrap | (() => Promise<VoxRtcBrowserSessionBootstrap>);
-  sessionEndpoint?: string;
-  fetch?: typeof fetch;
+  signalingEndpoint: string;
+  signalingTimeoutMs?: number;
+  webSocketFactory?: WebSocketFactory;
   peerConnectionFactory?: PeerConnectionFactory;
-  eventSourceFactory?: EventSourceFactory;
   getUserMedia?: GetUserMedia;
   audioElement?: HTMLAudioElement;
   audioConstraints?: boolean | MediaTrackConstraints;
@@ -24,7 +20,6 @@ export interface VoxRtcBrowserClientOptions {
 }
 
 export interface VoxRtcBrowserConnectOptions {
-  session?: VoxRtcBrowserSessionBootstrap;
   audioConstraints?: boolean | MediaTrackConstraints;
 }
 
@@ -79,7 +74,13 @@ export interface VoxRtcBrowserEvents {
   serverIceCandidate: RTCIceCandidateInit | null;
   serverConnectionState: Record<string, unknown>;
   serverIceConnectionState: Record<string, unknown>;
-  sseMessage: Record<string, unknown>;
+  signalingMessage: VoxRtcSignalingEvent;
+}
+
+export interface VoxRtcSignalingEvent {
+  id?: string;
+  type: string;
+  data: Record<string, unknown>;
 }
 
 export type VoxRtcBrowserEventName = keyof VoxRtcBrowserEvents;
@@ -87,20 +88,15 @@ export type VoxRtcBrowserHandler<T extends VoxRtcBrowserEventName> = (payload: V
 export type Unsubscribe = () => void;
 
 export type PeerConnectionFactory = (configuration: RTCConfiguration) => RTCPeerConnection;
-export type EventSourceFactory = (url: string) => EventSourceLike;
 export type GetUserMedia = (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+export type WebSocketFactory = (url: string) => WebSocketLike;
 
-export interface EventSourceLike {
-  onmessage: ((event: MessageEvent<string>) => void) | null;
-  close(): void;
-  addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void;
-  removeEventListener?(type: string, listener: (event: MessageEvent<string>) => void): void;
-}
-
-export interface VoxRtcOfferResponse {
-  sessionId: string;
-  mediaToken: string;
-  type: RTCSdpType;
-  sdp: string;
-  eventsUrl: string;
+export interface WebSocketLike {
+  readonly readyState: number;
+  onopen: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent<unknown>) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onclose: ((event: CloseEvent) => void) | null;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
 }

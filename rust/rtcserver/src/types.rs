@@ -52,12 +52,25 @@ pub struct RtcIceServer {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionBootstrap {
     pub session_id: String,
-    pub client_token: String,
     pub expires_at: String,
     #[serde(default)]
-    pub join_token_ttl_seconds: u64,
+    pub attach_ttl_seconds: u64,
     #[serde(default)]
     pub ice_servers: Vec<RtcIceServer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RtcSessionDescription {
+    pub r#type: String,
+    pub sdp: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RtcIceCandidate {
+    pub candidate: String,
+    pub sdp_mid: Option<String>,
+    pub sdp_m_line_index: Option<u32>,
+    pub username_fragment: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

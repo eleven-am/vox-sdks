@@ -1,43 +1,48 @@
-# Vox SDKs
+# Vox RTC SDKs
 
-Server-side SDKs for controlling Vox-hosted WebRTC sessions.
+SDKs for applications that create and control Vox-hosted WebRTC conversations.
+They are intentionally separate from Vox's ordinary transcription and synthesis
+APIs.
 
-Current scope:
+## Transport
 
-- Create RTC sessions over HTTP
-- Attach to Vox RTC control channels over PondSocket on `/v1/socket`
-- Send `session.update`, `response.*`, and `client.event` messages
-- Receive RTC control events such as transcripts, turn state, interruption events, and response lifecycle events
+The TypeScript, Python, Go, and Rust server SDKs create an RTC session over HTTP
+and control it over PondSocket. The Elixir server SDK uses Vox's native gRPC RTC
+service instead. Browser applications open one same-origin WebSocket to the
+application gateway; the application keeps Vox credentials and its internal
+Vox endpoint on the server.
 
-This repository is intentionally narrow. It is for apps that manage Vox-hosted WebRTC calls. It is not the general STT/TTS/text SDK surface.
+The gateway proxies signaling and control only. Microphone and assistant audio
+continue to flow directly between the browser and Vox over the negotiated
+WebRTC ICE path. The application server never relays PCM.
 
-When Vox is configured with `VOX_API_KEY`, these SDKs authenticate the RTC session bootstrap over HTTP and the `/v1/socket` control connection automatically.
+## Packages
 
-Packages:
+- `typescript/vox-rtc-client`: browser media and same-origin gateway signaling
+- `typescript/vox-rtc-server`: PondSocket control and the application gateway
+- `python/vox-rtc-server`: PondSocket control
+- `go/rtcserver`: PondSocket control
+- `rust/rtcserver`: PondSocket control
+- `elixir/vox_rtc_server`: native gRPC control
 
-- `typescript/vox-rtc-server`
-- `typescript/vox-rtc-client`
-- `go/rtcserver`
-- `python/vox-rtc-server`
-- `rust/rtcserver`
+See `typescript/examples/express-rtc-proxy` for a complete browser gateway
+example.
 
-The server SDKs control RTC sessions from trusted backends. The browser client SDK joins the media path from frontend applications without holding a Vox API key.
+## Security boundary
 
-Examples:
-
-- `typescript/examples/express-rtc-proxy` serves a browser WebRTC test page and uses the TypeScript SDK from a tiny Express backend.
+Browser code receives public ICE configuration and an SDK-internal opaque
+gateway capability. It never receives the Vox API key, Vox hostname, internal
+PondSocket endpoint, or any Vox-issued transport credential. Gateway lifecycle
+hooks receive the original incoming request and complete server-side session;
+applications may inspect that request or ignore it.
 
 ## Versioning
 
 Each package is versioned independently.
 
-- Go module tags should use the module subdirectory prefix, for example:
-  - `go/rtcserver/v0.1.7`
-- TypeScript package versions and release tags are independent:
-  - `typescript/vox-rtc-client/v0.1.3`
-  - `typescript/vox-rtc-server/v0.1.8`
-  - pushing either tag runs `.github/workflows/publish-typescript.yml`, which verifies, builds, and publishes that package to npm through trusted publishing
-- Python package versions live in:
-  - `python/vox-rtc-server/pyproject.toml`
-- Rust crate versions live in:
-  - `rust/rtcserver/Cargo.toml`
+- Go module tags use the module prefix, for example `go/rtcserver/v0.1.7`.
+- TypeScript tags use `typescript/vox-rtc-client/vX.Y.Z` and
+  `typescript/vox-rtc-server/vX.Y.Z`.
+- Python and Rust versions live in their package manifests.
+- Elixir releases use the `elixir/vox_rtc_server/vX.Y.Z` tag prefix and Hex
+  package version.

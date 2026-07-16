@@ -70,7 +70,11 @@ def _required_str(value: Any, fallback: str = "") -> str:
 
 
 def _optional_number(value: Any) -> int | float | None:
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    return (
+        value
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        else None
+    )
 
 
 def _optional_str_list(value: Any) -> list[str] | None:
@@ -147,11 +151,16 @@ class VoxRtcControlSession:
             value = _state_value(state)
             if value == ChannelState.JOINED.value and not done.done():
                 done.set_result(None)
-            elif value in (ChannelState.DECLINED.value, ChannelState.CLOSED.value) and not done.done():
+            elif (
+                value in (ChannelState.DECLINED.value, ChannelState.CLOSED.value)
+                and not done.done()
+            ):
                 reason = _join_error(self._channel)
                 suffix = f": {reason}" if reason else ""
                 done.set_exception(
-                    RuntimeError(f"RTC channel join failed for {self._channel_name}: {value}{suffix}")
+                    RuntimeError(
+                        f"RTC channel join failed for {self._channel_name}: {value}{suffix}"
+                    )
                 )
 
         unsubscribe = self._channel.on_channel_state_change(handle_state)
@@ -177,7 +186,9 @@ class VoxRtcControlSession:
 
         return self._channel.on_message(callback)
 
-    def on(self, event_name: str, handler: Callable[[dict[str, Any]], None]) -> Unsubscribe:
+    def on(
+        self, event_name: str, handler: Callable[[dict[str, Any]], None]
+    ) -> Unsubscribe:
         def callback(message: Any) -> None:
             handler(_payload_dict(getattr(message, "payload", None)))
 
@@ -191,7 +202,9 @@ class VoxRtcControlSession:
             EVT_RTC_SESSION_ATTACHED,
             lambda payload: handler(
                 SessionAttachedEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                 )
@@ -206,7 +219,9 @@ class VoxRtcControlSession:
             session = payload.get("session")
             handler(
                 SessionCreatedEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     session=dict(session) if isinstance(session, Mapping) else None,
@@ -222,7 +237,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 TranscriptEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     transcript=_required_str(payload.get("transcript")),
@@ -243,7 +260,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 TurnStateEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     state=_required_str(payload.get("state"), "unknown"),
@@ -261,7 +280,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 SpeechEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     timestamp_ms=_optional_number(payload.get("timestamp_ms")),
@@ -283,7 +304,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 TranscriptDeltaEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     delta=_required_str(payload.get("delta")),
@@ -301,7 +324,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 TurnEouPredictedEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     probability=_optional_number(payload.get("probability")),
@@ -325,7 +350,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 ResponseEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     response_id=_optional_str(payload.get("response_id")),
@@ -334,19 +361,27 @@ class VoxRtcControlSession:
 
         return self.on(event_name, emit)
 
-    def on_response_created(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+    def on_response_created(
+        self, handler: Callable[[ResponseEvent], None]
+    ) -> Unsubscribe:
         return self._on_response_event(EVT_RESPONSE_CREATED, handler)
 
-    def on_response_committed(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+    def on_response_committed(
+        self, handler: Callable[[ResponseEvent], None]
+    ) -> Unsubscribe:
         return self._on_response_event(EVT_RESPONSE_COMMITTED, handler)
 
     def on_response_done(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
         return self._on_response_event(EVT_RESPONSE_DONE, handler)
 
-    def on_response_cancelled(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+    def on_response_cancelled(
+        self, handler: Callable[[ResponseEvent], None]
+    ) -> Unsubscribe:
         return self._on_response_event(EVT_RESPONSE_CANCELLED, handler)
 
-    def on_response_audio_clear(self, handler: Callable[[ResponseEvent], None]) -> Unsubscribe:
+    def on_response_audio_clear(
+        self, handler: Callable[[ResponseEvent], None]
+    ) -> Unsubscribe:
         return self._on_response_event(EVT_RESPONSE_AUDIO_CLEAR, handler)
 
     def _on_interruption_event(
@@ -357,7 +392,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 InterruptionEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     response_id=_optional_str(payload.get("response_id")),
@@ -387,7 +424,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 BrowserEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     event=_required_str(payload.get("event")),
@@ -401,12 +440,16 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 CloseEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     reason=_required_str(payload.get("reason"), "unknown"),
                     connection_state=_optional_str(payload.get("connection_state")),
-                    ice_connection_state=_optional_str(payload.get("ice_connection_state")),
+                    ice_connection_state=_optional_str(
+                        payload.get("ice_connection_state")
+                    ),
                     data_channel_state=_optional_str(payload.get("data_channel_state")),
                 )
             )
@@ -417,7 +460,9 @@ class VoxRtcControlSession:
         def emit(payload: dict[str, Any]) -> None:
             handler(
                 ErrorEvent(
-                    session_id=_required_str(payload.get("session_id"), self._session_id),
+                    session_id=_required_str(
+                        payload.get("session_id"), self._session_id
+                    ),
                     channel_name=self._channel_name,
                     data=payload,
                     message=_optional_str(payload.get("message")),
@@ -427,7 +472,9 @@ class VoxRtcControlSession:
 
         return self.on(EVT_ERROR, emit)
 
-    def send_control(self, event: str, payload: Mapping[str, Any] | None = None) -> None:
+    def send_control(
+        self, event: str, payload: Mapping[str, Any] | None = None
+    ) -> None:
         self._channel.send_message(event, dict(payload or {}))
 
     def configure(self, config: SessionConfig) -> None:

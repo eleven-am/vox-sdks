@@ -106,11 +106,10 @@ func TestCreateSession(t *testing.T) {
 			t.Fatalf("unexpected authorization header: %q", got)
 		}
 		_ = json.NewEncoder(w).Encode(SessionBootstrap{
-			SessionID:           "rtc_123",
-			ClientToken:         "tok_123",
-			ExpiresAt:           "2026-01-01T00:00:00Z",
-			JoinTokenTTLSeconds: 120,
-			ICEServers:          []RTCIceServer{{URLs: []string{"stun:turn.example.com:3478"}}},
+			SessionID:        "rtc_123",
+			ExpiresAt:        "2026-01-01T00:00:00Z",
+			AttachTTLSeconds: 120,
+			ICEServers:       []RTCIceServer{{URLs: []string{"stun:turn.example.com:3478"}}},
 		})
 	}))
 	defer server.Close()
