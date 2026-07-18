@@ -41,3 +41,38 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+## Acknowledged response starts
+
+`start_response` stays fire-and-forget. When you want the positive
+acknowledgement before pumping deltas, use `start_response_and_wait`, which
+correlates the `response.created` event (or the typed `error`) with the
+`generation_id` it sent:
+
+```python
+ack = await session.start_response_and_wait()
+if ack.accepted:
+    session.append_response_text("Hello.")
+    session.commit_response()
+else:
+    print("start rejected:", ack.error.code if ack.error else None)
+```
+
+You can also thread your own generation id through every response command via
+`ResponseOptions(generation_id="gen-42")`; response lifecycle events
+(`ResponseEvent`, `InterruptionEvent`) expose the echoed `generation_id`.
+
+## Error handling
+
+`ErrorEvent` carries `code` (stable slug), `recoverable`, and an optional
+`generation_id` scoping the failure to one response generation. Known codes are
+exported as `ERROR_CODE_*` constants (`response_rejected_turn_state`,
+`response_rejected_user_speech`, `response_stale_generation`,
+`response_already_active`, `response_failed`, `command_invalid`,
+`session_failed`).
+
+Only `recoverable is False` (or the transport itself closing) should end the
+call. Recoverable errors are per-command failures: handle them and keep the
+session running. Old Vox servers omit `code` and `recoverable`; the SDK then
+defaults `recoverable` to `True`, so treat such errors as recoverable unless
+the transport closed.

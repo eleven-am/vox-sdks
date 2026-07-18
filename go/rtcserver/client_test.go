@@ -49,6 +49,8 @@ func (f *fakeChannel) SendMessage(event string, payload map[string]interface{}) 
 }
 
 func (f *fakeChannel) OnMessage(callback func(event string, payload map[string]interface{})) func() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.msgHandlers = append(f.msgHandlers, callback)
 	return func() {}
 }
@@ -528,6 +530,289 @@ func TestOnConnectionChangeObservesReconnection(t *testing.T) {
 
 	if len(states) != 3 || states[0] != true || states[1] != false || states[2] != true {
 		t.Fatalf("unexpected connection states: %#v", states)
+	}
+}
+
+func TestOnErrorParsesTypedFields(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event ErrorEvent
+	session.OnError(func(e ErrorEvent) {
+		event = e
+	})
+	fake.channel.emit(EventError, map[string]interface{}{
+		"message":       "turn state cannot accept a response",
+		"code":          ErrorCodeResponseRejectedTurnState,
+		"recoverable":   true,
+		"generation_id": "gen-42",
+		"session_id":    "rtc_123",
+	})
+
+	if event.Code != ErrorCodeResponseRejectedTurnState {
+		t.Fatalf("unexpected code: %q", event.Code)
+	}
+	if !event.Recoverable {
+		t.Fatalf("expected recoverable error: %#v", event)
+	}
+	if event.GenerationID != "gen-42" {
+		t.Fatalf("unexpected generation id: %q", event.GenerationID)
+	}
+	if event.Message != "turn state cannot accept a response" {
+		t.Fatalf("unexpected message: %q", event.Message)
+	}
+}
+
+func TestOnErrorFatalCode(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event ErrorEvent
+	session.OnError(func(e ErrorEvent) {
+		event = e
+	})
+	fake.channel.emit(EventError, map[string]interface{}{
+		"message":     "session crashed",
+		"code":        ErrorCodeSessionFailed,
+		"recoverable": false,
+		"session_id":  "rtc_123",
+	})
+
+	if event.Code != ErrorCodeSessionFailed {
+		t.Fatalf("unexpected code: %q", event.Code)
+	}
+	if event.Recoverable {
+		t.Fatalf("expected fatal error: %#v", event)
+	}
+	if event.GenerationID != "" {
+		t.Fatalf("unexpected generation id: %q", event.GenerationID)
+	}
+}
+
+func TestOnErrorMissingRecoverableDefaultsTrue(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event ErrorEvent
+	session.OnError(func(e ErrorEvent) {
+		event = e
+	})
+	fake.channel.emit(EventError, map[string]interface{}{
+		"message":    "legacy failure",
+		"session_id": "rtc_123",
+	})
+
+	if !event.Recoverable {
+		t.Fatalf("expected missing recoverable to default true: %#v", event)
+	}
+	if event.Code != "" {
+		t.Fatalf("unexpected code: %q", event.Code)
+	}
+}
+
+func TestResponseOptionsGenerationIDThreadsOutboundPayloads(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	options := &ResponseOptions{GenerationID: "gen-42"}
+	session.StartResponse(options)
+	session.AppendResponseText("hello", options)
+	session.CommitResponse()
+	session.CancelResponse()
+
+	sent := fake.channel.sentMessages()
+	if len(sent) != 4 {
+		t.Fatalf("unexpected message count: %d", len(sent))
+	}
+	expected := []string{"response.start", "response.delta", "response.commit", "response.cancel"}
+	for i, message := range sent {
+		if message.event != expected[i] {
+			t.Fatalf("unexpected event %d: %s", i, message.event)
+		}
+		if message.payload["generation_id"] != "gen-42" {
+			t.Fatalf("missing generation id on %s: %#v", message.event, message.payload)
+		}
+	}
+}
+
+func TestCommitAndCancelAcceptExplicitGenerationID(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	session.CommitResponse(&ResponseOptions{GenerationID: "gen-a"})
+	session.CancelResponse(&ResponseOptions{GenerationID: "gen-b"})
+
+	sent := fake.channel.sentMessages()
+	if sent[0].payload["generation_id"] != "gen-a" {
+		t.Fatalf("unexpected commit payload: %#v", sent[0].payload)
+	}
+	if sent[1].payload["generation_id"] != "gen-b" {
+		t.Fatalf("unexpected cancel payload: %#v", sent[1].payload)
+	}
+}
+
+func TestResponseLifecycleEventsExposeGenerationID(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var created ResponseEvent
+	var cleared ResponseEvent
+	var interruption InterruptionEvent
+	session.OnResponseCreated(func(e ResponseEvent) {
+		created = e
+	})
+	session.OnResponseAudioClear(func(e ResponseEvent) {
+		cleared = e
+	})
+	session.OnInterruptionDetected(func(e InterruptionEvent) {
+		interruption = e
+	})
+
+	fake.channel.emit(EventResponseCreated, map[string]interface{}{
+		"response_id":   "resp_1",
+		"generation_id": "gen-42",
+		"session_id":    "rtc_123",
+	})
+	fake.channel.emit(EventResponseAudioClear, map[string]interface{}{
+		"response_id":   "resp_1",
+		"generation_id": "gen-42",
+		"session_id":    "rtc_123",
+	})
+	fake.channel.emit(EventInterruptionDetected, map[string]interface{}{
+		"response_id":   "resp_1",
+		"generation_id": "gen-42",
+		"vad_active_ms": 120.0,
+		"session_id":    "rtc_123",
+	})
+
+	if created.ResponseID != "resp_1" || created.GenerationID != "gen-42" {
+		t.Fatalf("unexpected created event: %#v", created)
+	}
+	if cleared.GenerationID != "gen-42" {
+		t.Fatalf("unexpected audio clear event: %#v", cleared)
+	}
+	if interruption.GenerationID != "gen-42" || interruption.VADActiveMS != 120 {
+		t.Fatalf("unexpected interruption event: %#v", interruption)
+	}
+}
+
+func awaitStartPayload(t *testing.T, fake *fakeSocket) map[string]interface{} {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, message := range fake.channel.sentMessages() {
+			if message.event == "response.start" {
+				return message.payload
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("response.start was never sent")
+	return nil
+}
+
+func TestStartResponseAndWaitAccepted(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	type result struct {
+		ack StartAck
+		err error
+	}
+	results := make(chan result, 1)
+	go func() {
+		ack, err := session.StartResponseAndWait(context.Background(), nil)
+		results <- result{ack: ack, err: err}
+	}()
+
+	payload := awaitStartPayload(t, fake)
+	generationID, ok := payload["generation_id"].(string)
+	if !ok || generationID == "" {
+		t.Fatalf("missing generation id on response.start: %#v", payload)
+	}
+	fake.channel.emit(EventResponseCreated, map[string]interface{}{
+		"response_id":   "resp_9",
+		"generation_id": "gen-other",
+		"session_id":    "rtc_123",
+	})
+	fake.channel.emit(EventResponseCreated, map[string]interface{}{
+		"response_id":   "resp_1",
+		"generation_id": generationID,
+		"session_id":    "rtc_123",
+	})
+
+	outcome := <-results
+	if outcome.err != nil {
+		t.Fatalf("StartResponseAndWait returned error: %v", outcome.err)
+	}
+	if !outcome.ack.Accepted {
+		t.Fatalf("expected accepted ack: %#v", outcome.ack)
+	}
+	if outcome.ack.ResponseID != "resp_1" || outcome.ack.GenerationID != generationID {
+		t.Fatalf("unexpected ack: %#v", outcome.ack)
+	}
+	if outcome.ack.Error != nil {
+		t.Fatalf("unexpected ack error: %#v", outcome.ack.Error)
+	}
+}
+
+func TestStartResponseAndWaitTypedRejection(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	type result struct {
+		ack StartAck
+		err error
+	}
+	results := make(chan result, 1)
+	go func() {
+		ack, err := session.StartResponseAndWait(
+			context.Background(),
+			&ResponseOptions{GenerationID: "gen-42"},
+		)
+		results <- result{ack: ack, err: err}
+	}()
+
+	payload := awaitStartPayload(t, fake)
+	if payload["generation_id"] != "gen-42" {
+		t.Fatalf("unexpected start payload: %#v", payload)
+	}
+	fake.channel.emit(EventError, map[string]interface{}{
+		"message":       "user is speaking",
+		"code":          ErrorCodeResponseRejectedUserSpeech,
+		"recoverable":   true,
+		"generation_id": "gen-42",
+		"session_id":    "rtc_123",
+	})
+
+	outcome := <-results
+	if outcome.err != nil {
+		t.Fatalf("StartResponseAndWait returned error: %v", outcome.err)
+	}
+	if outcome.ack.Accepted {
+		t.Fatalf("expected rejection: %#v", outcome.ack)
+	}
+	if outcome.ack.GenerationID != "gen-42" {
+		t.Fatalf("unexpected generation id: %q", outcome.ack.GenerationID)
+	}
+	if outcome.ack.Error == nil || outcome.ack.Error.Code != ErrorCodeResponseRejectedUserSpeech {
+		t.Fatalf("unexpected ack error: %#v", outcome.ack.Error)
+	}
+	if !outcome.ack.Error.Recoverable {
+		t.Fatalf("expected recoverable rejection: %#v", outcome.ack.Error)
+	}
+}
+
+func TestStartResponseAndWaitContextTimeout(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	ack, err := session.StartResponseAndWait(ctx, &ResponseOptions{GenerationID: "gen-42"})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if ack.Accepted {
+		t.Fatalf("expected unaccepted ack: %#v", ack)
+	}
+	if ack.GenerationID != "gen-42" {
+		t.Fatalf("unexpected generation id: %q", ack.GenerationID)
+	}
+	payload := awaitStartPayload(t, fake)
+	if payload["generation_id"] != "gen-42" {
+		t.Fatalf("unexpected start payload: %#v", payload)
 	}
 }
 

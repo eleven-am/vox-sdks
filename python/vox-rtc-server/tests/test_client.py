@@ -6,10 +6,15 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from vox_rtc_server import (
+    ERROR_CODE_RESPONSE_REJECTED_TURN_STATE,
+    ERROR_CODE_SESSION_FAILED,
     ChannelState,
     ClientEventEnvelope,
     ConnectionState,
+    ResponseOptions,
     SessionConfig,
     VoxRtcServerClient,
 )
@@ -491,6 +496,210 @@ def test_on_connection_change_forwards_socket_state() -> None:
 
     assert ConnectionState.CONNECTED in states
     assert client.connection_state == ConnectionState.CONNECTED
+
+
+def _attach(fake_socket: FakeSocket) -> Any:
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+    return client.attach_session("rtc_123")
+
+
+def test_on_error_parses_typed_error_fields() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    errors: list[Any] = []
+    unsubscribe = session.on_error(errors.append)
+
+    fake_socket.channel.emit(
+        "error",
+        {
+            "message": "session broke",
+            "code": ERROR_CODE_SESSION_FAILED,
+            "recoverable": False,
+            "generation_id": "gen-42",
+            "session_id": "rtc_123",
+        },
+    )
+    unsubscribe()
+
+    assert len(errors) == 1
+    assert errors[0].message == "session broke"
+    assert errors[0].code == "session_failed"
+    assert errors[0].recoverable is False
+    assert errors[0].generation_id == "gen-42"
+
+
+def test_on_error_defaults_missing_recoverable_to_true() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    errors: list[Any] = []
+    unsubscribe = session.on_error(errors.append)
+
+    fake_socket.channel.emit(
+        "error",
+        {"message": "old server error", "session_id": "rtc_123"},
+    )
+    unsubscribe()
+
+    assert len(errors) == 1
+    assert errors[0].code is None
+    assert errors[0].recoverable is True
+    assert errors[0].generation_id is None
+
+
+def test_response_options_generation_id_threads_outbound_payloads() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+
+    session.start_response(ResponseOptions(generation_id="gen-42"))
+    session.append_response_text("Hello", ResponseOptions(generation_id="gen-42"))
+    session.commit_response(ResponseOptions(generation_id="gen-42"))
+    session.cancel_response(ResponseOptions(generation_id="gen-42"))
+    session.replace_response_text("Bye", ResponseOptions(generation_id="gen-43"))
+
+    sent = fake_socket.channel.sent
+    assert [event for event, _payload in sent] == [
+        "response.start",
+        "response.delta",
+        "response.commit",
+        "response.cancel",
+        "response.replace_text",
+    ]
+    assert sent[0][1] == {"generation_id": "gen-42"}
+    assert sent[1][1] == {"generation_id": "gen-42", "delta": "Hello"}
+    assert sent[2][1] == {"generation_id": "gen-42"}
+    assert sent[3][1] == {"generation_id": "gen-42"}
+    assert sent[4][1] == {"generation_id": "gen-43", "text": "Bye"}
+
+
+def test_explicit_generation_id_is_threaded_to_later_commands() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+
+    session.start_response(ResponseOptions(generation_id="gen-42"))
+    session.append_response_text("Hello")
+    session.commit_response()
+
+    sent = fake_socket.channel.sent
+    assert sent[1][1]["generation_id"] == "gen-42"
+    assert sent[2][1]["generation_id"] == "gen-42"
+
+
+def test_response_lifecycle_events_expose_generation_id() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    responses: list[Any] = []
+    interruptions: list[Any] = []
+    unsub_done = session.on_response_done(responses.append)
+    unsub_interruption = session.on_interruption_detected(interruptions.append)
+
+    fake_socket.channel.emit(
+        "response.done",
+        {"response_id": "resp_1", "generation_id": "gen-42", "session_id": "rtc_123"},
+    )
+    fake_socket.channel.emit(
+        "interruption.detected",
+        {
+            "response_id": "resp_1",
+            "generation_id": "gen-42",
+            "vad_active_ms": 120,
+            "session_id": "rtc_123",
+        },
+    )
+    unsub_done()
+    unsub_interruption()
+
+    assert len(responses) == 1
+    assert responses[0].response_id == "resp_1"
+    assert responses[0].generation_id == "gen-42"
+    assert len(interruptions) == 1
+    assert interruptions[0].generation_id == "gen-42"
+    assert interruptions[0].vad_active_ms == 120
+
+
+def test_start_response_and_wait_resolves_on_correlated_created() -> None:
+    fake_socket = FakeSocket()
+
+    async def scenario() -> Any:
+        session = await _attach(fake_socket)
+        task = asyncio.ensure_future(session.start_response_and_wait())
+        await asyncio.sleep(0)
+        generation_id = fake_socket.channel.sent[0][1]["generation_id"]
+        fake_socket.channel.emit(
+            "response.created",
+            {
+                "response_id": "resp_other",
+                "generation_id": "gen-other",
+                "session_id": "rtc_123",
+            },
+        )
+        fake_socket.channel.emit(
+            "response.created",
+            {
+                "response_id": "resp_1",
+                "generation_id": generation_id,
+                "session_id": "rtc_123",
+            },
+        )
+        return await task, generation_id
+
+    ack, generation_id = asyncio.run(scenario())
+
+    assert ack.accepted is True
+    assert ack.generation_id == generation_id
+    assert ack.response_id == "resp_1"
+    assert ack.error is None
+    assert fake_socket.channel.sent[0][0] == "response.start"
+
+
+def test_start_response_and_wait_returns_correlated_typed_rejection() -> None:
+    fake_socket = FakeSocket()
+
+    async def scenario() -> Any:
+        session = await _attach(fake_socket)
+        task = asyncio.ensure_future(
+            session.start_response_and_wait(ResponseOptions(generation_id="gen-42"))
+        )
+        await asyncio.sleep(0)
+        fake_socket.channel.emit(
+            "error",
+            {
+                "message": "not now",
+                "code": ERROR_CODE_RESPONSE_REJECTED_TURN_STATE,
+                "recoverable": True,
+                "generation_id": "gen-42",
+                "session_id": "rtc_123",
+            },
+        )
+        return await task
+
+    ack = asyncio.run(scenario())
+
+    assert ack.accepted is False
+    assert ack.generation_id == "gen-42"
+    assert ack.response_id is None
+    assert ack.error is not None
+    assert ack.error.code == "response_rejected_turn_state"
+    assert ack.error.recoverable is True
+    assert ack.error.generation_id == "gen-42"
+    assert fake_socket.channel.sent[0][1]["generation_id"] == "gen-42"
+
+
+def test_start_response_and_wait_times_out_without_ack() -> None:
+    fake_socket = FakeSocket()
+
+    async def scenario() -> None:
+        session = await _attach(fake_socket)
+        await session.start_response_and_wait(timeout=0.01)
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(scenario())
+
+    assert fake_socket.channel.sent[0][0] == "response.start"
+    assert fake_socket.channel.message_event_handlers.get("response.created") == []
+    assert fake_socket.channel.message_event_handlers.get("error") == []
 
 
 def test_connection_state_tolerates_unknown_socket_state() -> None:

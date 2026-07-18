@@ -227,10 +227,11 @@ func (s *ControlSession) OnResponseAudioClear(handler func(ResponseEvent)) func(
 func (s *ControlSession) onResponseEvent(eventName string, handler func(ResponseEvent)) func() {
 	return s.On(eventName, func(payload map[string]interface{}) {
 		handler(ResponseEvent{
-			SessionID:   eventSessionID(payload, s.sessionID),
-			ChannelName: s.channelName,
-			Data:        payload,
-			ResponseID:  stringValue(payload, "response_id", ""),
+			SessionID:    eventSessionID(payload, s.sessionID),
+			ChannelName:  s.channelName,
+			Data:         payload,
+			ResponseID:   stringValue(payload, "response_id", ""),
+			GenerationID: stringValue(payload, "generation_id", ""),
 		})
 	})
 }
@@ -247,10 +248,11 @@ func (s *ControlSession) onInterruptionEvent(eventName string, handler func(Inte
 	return s.On(eventName, func(payload map[string]interface{}) {
 		handler(InterruptionEvent{
 			ResponseEvent: ResponseEvent{
-				SessionID:   eventSessionID(payload, s.sessionID),
-				ChannelName: s.channelName,
-				Data:        payload,
-				ResponseID:  stringValue(payload, "response_id", ""),
+				SessionID:    eventSessionID(payload, s.sessionID),
+				ChannelName:  s.channelName,
+				Data:         payload,
+				ResponseID:   stringValue(payload, "response_id", ""),
+				GenerationID: stringValue(payload, "generation_id", ""),
 			},
 			VADActiveMS:       numberValue(payload, "vad_active_ms"),
 			PartialTranscript: stringValue(payload, "partial_transcript", ""),
@@ -287,11 +289,13 @@ func (s *ControlSession) OnClose(handler func(CloseEvent)) func() {
 func (s *ControlSession) OnError(handler func(ErrorEvent)) func() {
 	return s.On(EventError, func(payload map[string]interface{}) {
 		handler(ErrorEvent{
-			SessionID:   eventSessionID(payload, s.sessionID),
-			ChannelName: s.channelName,
-			Data:        payload,
-			Message:     stringValue(payload, "message", ""),
-			Code:        stringValue(payload, "code", ""),
+			SessionID:    eventSessionID(payload, s.sessionID),
+			ChannelName:  s.channelName,
+			Data:         payload,
+			Message:      stringValue(payload, "message", ""),
+			Code:         stringValue(payload, "code", ""),
+			Recoverable:  boolValue(payload, "recoverable", true),
+			GenerationID: stringValue(payload, "generation_id", ""),
 		})
 	})
 }
@@ -360,24 +364,59 @@ func (s *ControlSession) Configure(config SessionConfig) {
 func (s *ControlSession) StartResponse(options *ResponseOptions) {
 	payload := responseOptionsPayload(options)
 	s.responseMu.Lock()
-	s.responseGeneration++
-	random := make([]byte, 16)
-	if _, err := rand.Read(random); err == nil {
-		s.responseGenerationID = fmt.Sprintf(
-			"generation_%d_%s",
-			s.responseGeneration,
-			hex.EncodeToString(random),
-		)
+	if options != nil && options.GenerationID != "" {
+		s.responseGenerationID = options.GenerationID
 	} else {
-		s.responseGenerationID = fmt.Sprintf(
-			"generation_%d_%d",
-			s.responseGeneration,
-			time.Now().UnixNano(),
-		)
+		s.responseGenerationID = s.nextGenerationIDLocked()
 	}
 	payload["generation_id"] = s.responseGenerationID
 	s.responseMu.Unlock()
 	s.SendControl("response.start", payload)
+}
+
+func (s *ControlSession) StartResponseAndWait(ctx context.Context, options *ResponseOptions) (StartAck, error) {
+	opts := ResponseOptions{}
+	if options != nil {
+		opts = *options
+	}
+	if opts.GenerationID == "" {
+		s.responseMu.Lock()
+		opts.GenerationID = s.nextGenerationIDLocked()
+		s.responseMu.Unlock()
+	}
+	generationID := opts.GenerationID
+
+	ackCh := make(chan StartAck, 1)
+	unsubCreated := s.OnResponseCreated(func(event ResponseEvent) {
+		if event.GenerationID != generationID {
+			return
+		}
+		select {
+		case ackCh <- StartAck{Accepted: true, ResponseID: event.ResponseID, GenerationID: generationID}:
+		default:
+		}
+	})
+	defer unsubCreated()
+	unsubError := s.OnError(func(event ErrorEvent) {
+		if event.GenerationID != generationID {
+			return
+		}
+		rejection := event
+		select {
+		case ackCh <- StartAck{GenerationID: generationID, Error: &rejection}:
+		default:
+		}
+	})
+	defer unsubError()
+
+	s.StartResponse(&opts)
+
+	select {
+	case ack := <-ackCh:
+		return ack, nil
+	case <-ctx.Done():
+		return StartAck{GenerationID: generationID}, fmt.Errorf("timed out waiting for response.start acknowledgement on %s: %w", s.channelName, ctx.Err())
+	}
 }
 
 func (s *ControlSession) AppendResponseText(delta string, options *ResponseOptions) {
@@ -387,19 +426,29 @@ func (s *ControlSession) AppendResponseText(delta string, options *ResponseOptio
 	s.SendControl("response.delta", payload)
 }
 
-func (s *ControlSession) CommitResponse() {
+func (s *ControlSession) CommitResponse(options ...*ResponseOptions) {
 	payload := map[string]interface{}{}
+	if generationID := explicitGenerationID(options); generationID != "" {
+		payload["generation_id"] = generationID
+	}
 	s.addResponseGeneration(payload)
 	s.SendControl("response.commit", payload)
 }
 
-func (s *ControlSession) CancelResponse() {
+func (s *ControlSession) CancelResponse(options ...*ResponseOptions) {
 	payload := map[string]interface{}{}
+	explicit := explicitGenerationID(options)
 	s.responseMu.Lock()
-	if s.responseGenerationID != "" {
-		payload["generation_id"] = s.responseGenerationID
+	generationID := explicit
+	if generationID == "" {
+		generationID = s.responseGenerationID
 	}
-	s.responseGenerationID = ""
+	if generationID != "" {
+		payload["generation_id"] = generationID
+	}
+	if explicit == "" || explicit == s.responseGenerationID {
+		s.responseGenerationID = ""
+	}
 	s.responseMu.Unlock()
 	s.SendControl("response.cancel", payload)
 }
@@ -431,6 +480,9 @@ func (s *ControlSession) SendClientEvent(event ClientEvent) {
 }
 
 func (s *ControlSession) addResponseGeneration(payload map[string]interface{}) {
+	if _, ok := payload["generation_id"]; ok {
+		return
+	}
 	s.responseMu.Lock()
 	defer s.responseMu.Unlock()
 	if s.responseGenerationID != "" {
@@ -438,10 +490,37 @@ func (s *ControlSession) addResponseGeneration(payload map[string]interface{}) {
 	}
 }
 
+func (s *ControlSession) nextGenerationIDLocked() string {
+	s.responseGeneration++
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err == nil {
+		return fmt.Sprintf(
+			"generation_%d_%s",
+			s.responseGeneration,
+			hex.EncodeToString(random),
+		)
+	}
+	return fmt.Sprintf(
+		"generation_%d_%d",
+		s.responseGeneration,
+		time.Now().UnixNano(),
+	)
+}
+
+func explicitGenerationID(options []*ResponseOptions) string {
+	if len(options) == 0 || options[0] == nil {
+		return ""
+	}
+	return options[0].GenerationID
+}
+
 func responseOptionsPayload(options *ResponseOptions) map[string]interface{} {
 	payload := map[string]interface{}{}
 	if options != nil && options.AllowInterruptions != nil {
 		payload["allow_interruptions"] = *options.AllowInterruptions
+	}
+	if options != nil && options.GenerationID != "" {
+		payload["generation_id"] = options.GenerationID
 	}
 	return payload
 }
@@ -460,6 +539,18 @@ func stringValue(payload map[string]interface{}, key string, fallback string) st
 		return fallback
 	}
 	return text
+}
+
+func boolValue(payload map[string]interface{}, key string, fallback bool) bool {
+	value, ok := payload[key]
+	if !ok {
+		return fallback
+	}
+	typed, ok := value.(bool)
+	if !ok {
+		return fallback
+	}
+	return typed
 }
 
 func numberValue(payload map[string]interface{}, key string) float64 {

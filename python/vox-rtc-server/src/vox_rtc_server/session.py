@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from .types import (
@@ -19,6 +20,7 @@ from .types import (
     SessionCreatedEvent,
     SocketChannelLike,
     SpeechEvent,
+    StartAck,
     TranscriptDeltaEvent,
     TranscriptEvent,
     TurnEouPredictedEvent,
@@ -85,10 +87,17 @@ def _optional_str_list(value: Any) -> list[str] | None:
     return list(value)
 
 
+def _optional_bool(value: Any, default: bool) -> bool:
+    return value if isinstance(value, bool) else default
+
+
 def _response_options_payload(options: ResponseOptions | None) -> dict[str, Any]:
     payload: dict[str, Any] = {}
-    if options is not None and options.allow_interruptions is not None:
-        payload["allow_interruptions"] = options.allow_interruptions
+    if options is not None:
+        if options.allow_interruptions is not None:
+            payload["allow_interruptions"] = options.allow_interruptions
+        if options.generation_id is not None:
+            payload["generation_id"] = options.generation_id
     return payload
 
 
@@ -356,6 +365,7 @@ class VoxRtcControlSession:
                     channel_name=self._channel_name,
                     data=payload,
                     response_id=_optional_str(payload.get("response_id")),
+                    generation_id=_optional_str(payload.get("generation_id")),
                 )
             )
 
@@ -398,6 +408,7 @@ class VoxRtcControlSession:
                     channel_name=self._channel_name,
                     data=payload,
                     response_id=_optional_str(payload.get("response_id")),
+                    generation_id=_optional_str(payload.get("generation_id")),
                     vad_active_ms=_optional_number(payload.get("vad_active_ms")),
                     partial_transcript=_optional_str(payload.get("partial_transcript")),
                 )
@@ -467,6 +478,8 @@ class VoxRtcControlSession:
                     data=payload,
                     message=_optional_str(payload.get("message")),
                     code=_optional_str(payload.get("code")),
+                    recoverable=_optional_bool(payload.get("recoverable"), True),
+                    generation_id=_optional_str(payload.get("generation_id")),
                 )
             )
 
@@ -494,13 +507,61 @@ class VoxRtcControlSession:
         self.send_control("session.update", {"session": session})
 
     def start_response(self, options: ResponseOptions | None = None) -> None:
-        self._response_generation_counter += 1
-        self._response_generation_id = (
-            f"generation_{self._response_generation_counter}_{uuid.uuid4().hex}"
-        )
+        if options is not None and options.generation_id is not None:
+            self._response_generation_id = options.generation_id
+        else:
+            self._response_generation_id = self._next_response_generation_id()
         payload = _response_options_payload(options)
         payload["generation_id"] = self._response_generation_id
         self.send_control("response.start", payload)
+
+    async def start_response_and_wait(
+        self,
+        options: ResponseOptions | None = None,
+        *,
+        timeout: float = 5.0,
+    ) -> StartAck:
+        if options is not None and options.generation_id is not None:
+            generation_id = options.generation_id
+            start_options = options
+        else:
+            generation_id = self._next_response_generation_id()
+            start_options = replace(
+                options if options is not None else ResponseOptions(),
+                generation_id=generation_id,
+            )
+
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[StartAck] = loop.create_future()
+
+        def handle_created(event: ResponseEvent) -> None:
+            if event.generation_id == generation_id and not done.done():
+                done.set_result(
+                    StartAck(
+                        accepted=True,
+                        generation_id=generation_id,
+                        response_id=event.response_id,
+                    )
+                )
+
+        def handle_error(event: ErrorEvent) -> None:
+            if event.generation_id == generation_id and not done.done():
+                done.set_result(
+                    StartAck(
+                        accepted=False,
+                        generation_id=generation_id,
+                        error=event,
+                    )
+                )
+
+        unsubscribe_created = self.on_response_created(handle_created)
+        unsubscribe_error = self.on_error(handle_error)
+        try:
+            self.start_response(start_options)
+            return await asyncio.wait_for(done, timeout=timeout)
+        finally:
+            unsubscribe_created()
+            unsubscribe_error()
 
     def append_response_text(
         self,
@@ -512,13 +573,13 @@ class VoxRtcControlSession:
         self._add_response_generation(payload)
         self.send_control("response.delta", payload)
 
-    def commit_response(self) -> None:
-        payload: dict[str, Any] = {}
+    def commit_response(self, options: ResponseOptions | None = None) -> None:
+        payload = _response_options_payload(options)
         self._add_response_generation(payload)
         self.send_control("response.commit", payload)
 
-    def cancel_response(self) -> None:
-        payload: dict[str, Any] = {}
+    def cancel_response(self, options: ResponseOptions | None = None) -> None:
+        payload = _response_options_payload(options)
         self._add_response_generation(payload)
         self.send_control("response.cancel", payload)
         self._response_generation_id = None
@@ -553,6 +614,12 @@ class VoxRtcControlSession:
             {"event": envelope.event, "payload": envelope.payload},
         )
 
+    def _next_response_generation_id(self) -> str:
+        self._response_generation_counter += 1
+        return f"generation_{self._response_generation_counter}_{uuid.uuid4().hex}"
+
     def _add_response_generation(self, payload: dict[str, Any]) -> None:
+        if "generation_id" in payload:
+            return
         if self._response_generation_id is not None:
             payload["generation_id"] = self._response_generation_id

@@ -18,5 +18,6 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 url = "2"
+uuid = { version = "1", features = ["v4"] }
 pondsocket-client = "0.1.5"
 pondsocket-common = "0.1.4"

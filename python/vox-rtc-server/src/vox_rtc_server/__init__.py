@@ -3,6 +3,13 @@ from __future__ import annotations
 from .client import VoxRtcServerClient
 from .session import VoxRtcControlSession
 from .types import (
+    ERROR_CODE_COMMAND_INVALID,
+    ERROR_CODE_RESPONSE_ALREADY_ACTIVE,
+    ERROR_CODE_RESPONSE_FAILED,
+    ERROR_CODE_RESPONSE_REJECTED_TURN_STATE,
+    ERROR_CODE_RESPONSE_REJECTED_USER_SPEECH,
+    ERROR_CODE_RESPONSE_STALE_GENERATION,
+    ERROR_CODE_SESSION_FAILED,
     BrowserEvent,
     ChannelState,
     ClientEventEnvelope,
@@ -20,6 +27,7 @@ from .types import (
     SessionConfig,
     SessionCreatedEvent,
     SpeechEvent,
+    StartAck,
     TranscriptDeltaEvent,
     TranscriptEvent,
     TurnEouPredictedEvent,
@@ -30,6 +38,13 @@ from .types import (
 __version__ = "0.2.0"
 
 __all__ = [
+    "ERROR_CODE_COMMAND_INVALID",
+    "ERROR_CODE_RESPONSE_ALREADY_ACTIVE",
+    "ERROR_CODE_RESPONSE_FAILED",
+    "ERROR_CODE_RESPONSE_REJECTED_TURN_STATE",
+    "ERROR_CODE_RESPONSE_REJECTED_USER_SPEECH",
+    "ERROR_CODE_RESPONSE_STALE_GENERATION",
+    "ERROR_CODE_SESSION_FAILED",
     "BrowserEvent",
     "ChannelState",
     "ClientEventEnvelope",
@@ -47,6 +62,7 @@ __all__ = [
     "SessionConfig",
     "SessionCreatedEvent",
     "SpeechEvent",
+    "StartAck",
     "TranscriptDeltaEvent",
     "TranscriptEvent",
     "TurnEouPredictedEvent",

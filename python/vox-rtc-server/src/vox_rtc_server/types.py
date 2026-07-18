@@ -64,6 +64,7 @@ class SessionConfig:
 @dataclass(slots=True)
 class ResponseOptions:
     allow_interruptions: bool | None = None
+    generation_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -156,6 +157,7 @@ class ResponseEvent:
     channel_name: str
     data: dict[str, Any]
     response_id: str | None = None
+    generation_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -191,6 +193,25 @@ class ErrorEvent:
     data: dict[str, Any]
     message: str | None = None
     code: str | None = None
+    recoverable: bool = True
+    generation_id: str | None = None
+
+
+ERROR_CODE_RESPONSE_REJECTED_TURN_STATE = "response_rejected_turn_state"
+ERROR_CODE_RESPONSE_REJECTED_USER_SPEECH = "response_rejected_user_speech"
+ERROR_CODE_RESPONSE_STALE_GENERATION = "response_stale_generation"
+ERROR_CODE_RESPONSE_ALREADY_ACTIVE = "response_already_active"
+ERROR_CODE_RESPONSE_FAILED = "response_failed"
+ERROR_CODE_COMMAND_INVALID = "command_invalid"
+ERROR_CODE_SESSION_FAILED = "session_failed"
+
+
+@dataclass(slots=True)
+class StartAck:
+    accepted: bool
+    generation_id: str
+    response_id: str | None = None
+    error: ErrorEvent | None = None
 
 
 Unsubscribe: TypeAlias = Callable[[], None]

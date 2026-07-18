@@ -18,12 +18,15 @@ import type {
   VoxRtcSessionCreatedEvent,
   VoxRtcSessionDescription,
   VoxRtcSpeechEvent,
+  VoxRtcStartResponseResult,
+  VoxRtcStartResponseWaitOptions,
   VoxRtcTranscriptDeltaEvent,
   VoxRtcTranscriptEvent,
   VoxRtcTurnEouPredictedEvent,
   VoxRtcTurnStateEvent,
   VoxRtcWireEvent,
 } from "./types.js";
+import { VOX_START_ACK_TIMEOUT_CODE } from "./types.js";
 
 const EVT_CLOSE = "rtc.client.disconnected";
 const EVT_BROWSER_EVENT = "browser.event";
@@ -104,6 +107,7 @@ function responseEvent(
   return {
     ...baseEvent(payload, sessionId, channelName),
     responseId: optionalString(payload.response_id),
+    generationId: optionalString(payload.generation_id),
   };
 }
 
@@ -442,6 +446,8 @@ export class VoxRtcControlSession {
         ...baseEvent(payload, this.#sessionId, this.#channelName),
         message: optionalString(payload.message),
         code: optionalString(payload.code),
+        recoverable: typeof payload.recoverable === "boolean" ? payload.recoverable : true,
+        generationId: optionalString(payload.generation_id),
       });
     });
   }
@@ -503,12 +509,7 @@ export class VoxRtcControlSession {
   }
 
   startResponse(options?: VoxRtcResponseOptions): void {
-    this.#responseGenerationCounter += 1;
-    this.#responseGenerationId = [
-      "generation",
-      this.#responseGenerationCounter.toString(36),
-      randomUUID(),
-    ].join("_");
+    this.#responseGenerationId = options?.generationId ?? this.#nextGenerationId();
     this.sendControl(
       "response.start",
       withAllowInterruptions(
@@ -518,34 +519,90 @@ export class VoxRtcControlSession {
     );
   }
 
+  startResponseAndWait(options?: VoxRtcStartResponseWaitOptions): Promise<VoxRtcStartResponseResult> {
+    const generationId = options?.generationId ?? this.#nextGenerationId();
+    const timeoutMs = options?.timeoutMs ?? 10_000;
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (result: VoxRtcStartResponseResult) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        offCreated();
+        offError();
+        resolve(result);
+      };
+
+      const offCreated = this.onResponseCreated((event) => {
+        if (event.generationId === generationId) {
+          finish({ accepted: true, responseId: event.responseId, generationId });
+        }
+      });
+
+      const offError = this.onError((event) => {
+        if (event.generationId === generationId) {
+          finish({
+            accepted: false,
+            error: {
+              code: event.code,
+              recoverable: event.recoverable,
+              message: event.message,
+            },
+          });
+        }
+      });
+
+      const timer = setTimeout(() => {
+        finish({
+          accepted: false,
+          error: {
+            code: VOX_START_ACK_TIMEOUT_CODE,
+            recoverable: true,
+            message: `Timed out waiting for response.created ack for ${generationId}`,
+          },
+        });
+      }, timeoutMs);
+
+      this.startResponse({ ...options, generationId });
+    });
+  }
+
   appendResponseText(delta: string, options?: VoxRtcResponseOptions): void {
     this.sendControl(
       "response.delta",
       withAllowInterruptions(
-        this.#withResponseGeneration({ delta }),
+        this.#withResponseGeneration({ delta }, options?.generationId),
         options,
       ),
     );
   }
 
-  commitResponse(): void {
+  commitResponse(options?: VoxRtcResponseOptions): void {
     this.sendControl(
       "response.commit",
-      this.#withResponseGeneration({}),
+      this.#withResponseGeneration({}, options?.generationId),
     );
   }
 
-  cancelResponse(): void {
+  cancelResponse(options?: VoxRtcResponseOptions): void {
     this.sendControl(
       "response.cancel",
-      this.#withResponseGeneration({}),
+      this.#withResponseGeneration({}, options?.generationId),
     );
-    this.#responseGenerationId = null;
+    if (options?.generationId === undefined || options.generationId === this.#responseGenerationId) {
+      this.#responseGenerationId = null;
+    }
   }
 
   replaceResponseText(text: string, options?: VoxRtcResponseOptions): void {
-    this.#responseGenerationId = null;
-    this.sendControl("response.replace_text", withAllowInterruptions({ text }, options));
+    this.#responseGenerationId = options?.generationId ?? null;
+    this.sendControl(
+      "response.replace_text",
+      withAllowInterruptions(
+        this.#withResponseGeneration({ text }, options?.generationId),
+        options,
+      ),
+    );
   }
 
   sendTextResponse(text: string, options?: VoxRtcResponseOptions & { cancelFirst?: boolean }): void {
@@ -567,10 +624,21 @@ export class VoxRtcControlSession {
 
   #withResponseGeneration(
     payload: Record<string, unknown>,
+    generationId?: string,
   ): Record<string, unknown> {
-    if (this.#responseGenerationId === null) {
+    const id = generationId ?? this.#responseGenerationId;
+    if (id === null || id === undefined) {
       return payload;
     }
-    return { ...payload, generation_id: this.#responseGenerationId };
+    return { ...payload, generation_id: id };
+  }
+
+  #nextGenerationId(): string {
+    this.#responseGenerationCounter += 1;
+    return [
+      "generation",
+      this.#responseGenerationCounter.toString(36),
+      randomUUID(),
+    ].join("_");
   }
 }

@@ -4,8 +4,8 @@ use crate::types::*;
 use serde_json::Value;
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
+use uuid::Uuid;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
@@ -404,7 +404,9 @@ impl VoxRtcControlSession {
                 session_id: base_session_id(&payload, &session_id),
                 channel_name: channel_name.clone(),
                 message: optional_string(&payload, "message"),
-                code: optional_string(&payload, "code"),
+                code: optional_nonempty_string(&payload, "code"),
+                recoverable: recoverable_flag(&payload),
+                generation_id: optional_nonempty_string(&payload, "generation_id"),
                 data: payload,
             });
         })
@@ -429,10 +431,55 @@ impl VoxRtcControlSession {
     }
 
     pub async fn start_response(&self, options: Option<ResponseOptions>) -> Result<()> {
-        let mut payload = response_options_payload(options);
-        let generation_id = self.next_response_generation();
-        payload.insert("generation_id".to_owned(), Value::String(generation_id));
+        let (_, payload) = self.start_payload(options);
         self.send_control("response.start", payload).await
+    }
+
+    pub async fn start_response_and_wait(
+        &self,
+        options: Option<ResponseOptions>,
+        wait_timeout: Duration,
+    ) -> Result<StartAck> {
+        let (generation_id, payload) = self.start_payload(options);
+        let mut messages = self.channel.subscribe_messages();
+        self.send_control("response.start", payload).await?;
+        timeout(wait_timeout, async move {
+            loop {
+                match next_message(messages.recv().await) {
+                    ControlFlow::Break(()) => return Err(VoxRtcError::ChannelClosed),
+                    ControlFlow::Continue(None) => continue,
+                    ControlFlow::Continue(Some((event, data))) => {
+                        if optional_nonempty_string(&data, "generation_id").as_deref()
+                            != Some(generation_id.as_str())
+                        {
+                            continue;
+                        }
+                        if event == EVENT_RESPONSE_CREATED {
+                            return Ok(StartAck {
+                                accepted: true,
+                                generation_id: generation_id.clone(),
+                                response_id: optional_string(&data, "response_id"),
+                                error_code: None,
+                                error_message: None,
+                                recoverable: true,
+                            });
+                        }
+                        if event == EVENT_ERROR {
+                            return Ok(StartAck {
+                                accepted: false,
+                                generation_id: generation_id.clone(),
+                                response_id: optional_string(&data, "response_id"),
+                                error_code: optional_nonempty_string(&data, "code"),
+                                error_message: optional_string(&data, "message"),
+                                recoverable: recoverable_flag(&data),
+                            });
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| VoxRtcError::Timeout("response.start acknowledgement"))?
     }
 
     pub async fn append_response_text(
@@ -440,21 +487,24 @@ impl VoxRtcControlSession {
         delta: impl Into<String>,
         options: Option<ResponseOptions>,
     ) -> Result<()> {
+        let explicit = explicit_generation(&options);
         let mut payload = response_options_payload(options);
         payload.insert("delta".to_owned(), Value::String(delta.into()));
-        self.add_response_generation(&mut payload);
+        self.thread_generation(&mut payload, explicit);
         self.send_control("response.delta", payload).await
     }
 
-    pub async fn commit_response(&self) -> Result<()> {
+    pub async fn commit_response(&self, options: Option<ResponseOptions>) -> Result<()> {
+        let explicit = explicit_generation(&options);
         let mut payload = EventData::new();
-        self.add_response_generation(&mut payload);
+        self.thread_generation(&mut payload, explicit);
         self.send_control("response.commit", payload).await
     }
 
-    pub async fn cancel_response(&self) -> Result<()> {
+    pub async fn cancel_response(&self, options: Option<ResponseOptions>) -> Result<()> {
+        let explicit = explicit_generation(&options);
         let mut payload = EventData::new();
-        self.add_response_generation(&mut payload);
+        self.thread_generation(&mut payload, explicit);
         self.clear_response_generation();
         self.send_control("response.cancel", payload).await
     }
@@ -465,8 +515,12 @@ impl VoxRtcControlSession {
         options: Option<ResponseOptions>,
     ) -> Result<()> {
         self.clear_response_generation();
+        let explicit = explicit_generation(&options);
         let mut payload = response_options_payload(options);
         payload.insert("text".to_owned(), Value::String(text.into()));
+        if let Some(generation_id) = explicit {
+            payload.insert("generation_id".to_owned(), Value::String(generation_id));
+        }
         self.send_control("response.replace_text", payload).await
     }
 
@@ -481,8 +535,8 @@ impl VoxRtcControlSession {
             return self.replace_response_text(text, options).await;
         }
         self.start_response(options.clone()).await?;
-        self.append_response_text(text, options).await?;
-        self.commit_response().await
+        self.append_response_text(text, options.clone()).await?;
+        self.commit_response(options).await
     }
 
     pub async fn send_client_event(&self, envelope: ClientEventEnvelope) -> Result<()> {
@@ -492,19 +546,48 @@ impl VoxRtcControlSession {
         self.send_control(EVENT_CLIENT_EVENT, payload).await
     }
 
+    fn start_payload(&self, options: Option<ResponseOptions>) -> (String, EventData) {
+        let explicit = explicit_generation(&options);
+        let mut payload = response_options_payload(options);
+        let generation_id = match explicit {
+            Some(id) => self.set_response_generation(id),
+            None => self.next_response_generation(),
+        };
+        payload.insert(
+            "generation_id".to_owned(),
+            Value::String(generation_id.clone()),
+        );
+        (generation_id, payload)
+    }
+
     fn next_response_generation(&self) -> String {
         let mut state = self
             .response_generation
             .lock()
             .expect("response generation mutex poisoned");
         state.counter += 1;
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let generation_id = format!("generation_{}_{}", state.counter, nonce);
+        let generation_id = format!("generation_{}_{}", state.counter, Uuid::new_v4());
         state.id = Some(generation_id.clone());
         generation_id
+    }
+
+    fn set_response_generation(&self, generation_id: String) -> String {
+        let mut state = self
+            .response_generation
+            .lock()
+            .expect("response generation mutex poisoned");
+        state.counter += 1;
+        state.id = Some(generation_id.clone());
+        generation_id
+    }
+
+    fn thread_generation(&self, payload: &mut EventData, explicit: Option<String>) {
+        match explicit {
+            Some(generation_id) => {
+                payload.insert("generation_id".to_owned(), Value::String(generation_id));
+            }
+            None => self.add_response_generation(payload),
+        }
     }
 
     fn add_response_generation(&self, payload: &mut EventData) {
@@ -570,6 +653,13 @@ fn response_options_payload(options: Option<ResponseOptions>) -> EventData {
     payload
 }
 
+fn explicit_generation(options: &Option<ResponseOptions>) -> Option<String> {
+    options
+        .as_ref()
+        .and_then(|options| options.generation_id.clone())
+        .filter(|id| !id.is_empty())
+}
+
 fn base_session_id(payload: &EventData, fallback: &str) -> String {
     required_string(payload, "session_id", fallback)
 }
@@ -579,6 +669,7 @@ fn response_event(payload: EventData, session_id: &str, channel_name: &str) -> R
         session_id: base_session_id(&payload, session_id),
         channel_name: channel_name.to_owned(),
         response_id: optional_string(&payload, "response_id"),
+        generation_id: optional_nonempty_string(&payload, "generation_id"),
         data: payload,
     }
 }
@@ -660,6 +751,228 @@ mod tests {
             commit.get("generation_id"),
             Some(&Value::String(generation_id))
         );
+    }
+
+    #[tokio::test]
+    async fn on_error_parses_typed_fields() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_error(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_ERROR.to_owned(),
+                payload(json!({
+                    "message": "cannot start now",
+                    "code": ERROR_CODE_SESSION_FAILED,
+                    "recoverable": false,
+                    "generation_id": "gen-9"
+                })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.message.as_deref(), Some("cannot start now"));
+        assert_eq!(event.code.as_deref(), Some(ERROR_CODE_SESSION_FAILED));
+        assert!(!event.recoverable);
+        assert_eq!(event.generation_id.as_deref(), Some("gen-9"));
+    }
+
+    #[tokio::test]
+    async fn on_error_defaults_missing_recoverable_to_true() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_error(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_ERROR.to_owned(),
+                payload(json!({ "message": "legacy server", "code": "" })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert!(event.recoverable);
+        assert_eq!(event.code, None);
+        assert_eq!(event.generation_id, None);
+    }
+
+    #[tokio::test]
+    async fn start_payload_uses_explicit_generation_id() {
+        let (session, _) = session().await;
+        let options = ResponseOptions {
+            allow_interruptions: Some(false),
+            generation_id: Some("gen-7".to_owned()),
+        };
+        let (generation_id, start) = session.start_payload(Some(options));
+        assert_eq!(generation_id, "gen-7");
+        assert_eq!(
+            start.get("generation_id"),
+            Some(&Value::String("gen-7".to_owned()))
+        );
+        assert_eq!(start.get("allow_interruptions"), Some(&Value::Bool(false)));
+
+        let mut commit = EventData::new();
+        session.thread_generation(&mut commit, None);
+        assert_eq!(
+            commit.get("generation_id"),
+            Some(&Value::String("gen-7".to_owned()))
+        );
+    }
+
+    #[tokio::test]
+    async fn start_payload_generates_generation_id_when_absent() {
+        let (session, _) = session().await;
+        let (generation_id, start) = session.start_payload(None);
+        assert!(generation_id.starts_with("generation_1_"));
+        assert!(generation_id.len() > "generation_1_".len());
+        assert_eq!(
+            start.get("generation_id"),
+            Some(&Value::String(generation_id))
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_generation_id_overrides_tracked_one() {
+        let (session, _) = session().await;
+        let tracked = session.next_response_generation();
+        let mut delta = payload(json!({ "delta": "hi" }));
+        session.thread_generation(&mut delta, Some("gen-42".to_owned()));
+        assert_eq!(
+            delta.get("generation_id"),
+            Some(&Value::String("gen-42".to_owned()))
+        );
+        assert_ne!(tracked, "gen-42");
+    }
+
+    #[tokio::test]
+    async fn response_events_expose_generation_id() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_response_created(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_RESPONSE_CREATED.to_owned(),
+                payload(json!({ "response_id": "resp-1", "generation_id": "gen-1" })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.response_id.as_deref(), Some("resp-1"));
+        assert_eq!(event.generation_id.as_deref(), Some("gen-1"));
+    }
+
+    #[tokio::test]
+    async fn audio_clear_and_interruption_expose_generation_id() {
+        let (session, sender) = session().await;
+        let (clear_tx, mut clear_rx) = mpsc::unbounded_channel();
+        let _clear = session.on_response_audio_clear(move |event| {
+            clear_tx.send(event).unwrap();
+        });
+        let (int_tx, mut int_rx) = mpsc::unbounded_channel();
+        let _interruption = session.on_interruption_detected(move |event| {
+            int_tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_RESPONSE_AUDIO_CLEAR.to_owned(),
+                payload(json!({ "response_id": "resp-2", "generation_id": "gen-2" })),
+            ))
+            .unwrap();
+        sender
+            .send((
+                EVENT_INTERRUPTION_DETECTED.to_owned(),
+                payload(json!({
+                    "response_id": "resp-2",
+                    "generation_id": "gen-2",
+                    "vad_active_ms": 250
+                })),
+            ))
+            .unwrap();
+        let clear = recv(&mut clear_rx).await;
+        assert_eq!(clear.generation_id.as_deref(), Some("gen-2"));
+        let interruption = recv(&mut int_rx).await;
+        assert_eq!(interruption.response.generation_id.as_deref(), Some("gen-2"));
+        assert_eq!(interruption.vad_active_ms, Some(250.0));
+    }
+
+    #[tokio::test]
+    async fn start_response_and_wait_resolves_on_matching_created() {
+        let (session, sender) = session().await;
+        let options = ResponseOptions {
+            generation_id: Some("gen-ack".to_owned()),
+            ..Default::default()
+        };
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            sender
+                .send((
+                    EVENT_RESPONSE_CREATED.to_owned(),
+                    payload(json!({ "response_id": "resp-other", "generation_id": "gen-other" })),
+                ))
+                .unwrap();
+            sender
+                .send((
+                    EVENT_RESPONSE_CREATED.to_owned(),
+                    payload(json!({ "response_id": "resp-9", "generation_id": "gen-ack" })),
+                ))
+                .unwrap();
+        });
+        let ack = session
+            .start_response_and_wait(Some(options), Duration::from_secs(2))
+            .await
+            .expect("ack within timeout");
+        assert!(ack.accepted);
+        assert_eq!(ack.generation_id, "gen-ack");
+        assert_eq!(ack.response_id.as_deref(), Some("resp-9"));
+        assert!(ack.recoverable);
+        assert_eq!(ack.error_code, None);
+    }
+
+    #[tokio::test]
+    async fn start_response_and_wait_surfaces_typed_rejection() {
+        let (session, sender) = session().await;
+        let options = ResponseOptions {
+            generation_id: Some("gen-rejected".to_owned()),
+            ..Default::default()
+        };
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            sender
+                .send((
+                    EVENT_ERROR.to_owned(),
+                    payload(json!({
+                        "message": "busy",
+                        "code": ERROR_CODE_RESPONSE_ALREADY_ACTIVE,
+                        "recoverable": true,
+                        "generation_id": "gen-rejected"
+                    })),
+                ))
+                .unwrap();
+        });
+        let ack = session
+            .start_response_and_wait(Some(options), Duration::from_secs(2))
+            .await
+            .expect("rejection within timeout");
+        assert!(!ack.accepted);
+        assert_eq!(ack.generation_id, "gen-rejected");
+        assert_eq!(
+            ack.error_code.as_deref(),
+            Some(ERROR_CODE_RESPONSE_ALREADY_ACTIVE)
+        );
+        assert_eq!(ack.error_message.as_deref(), Some("busy"));
+        assert!(ack.recoverable);
+    }
+
+    #[tokio::test]
+    async fn start_response_and_wait_times_out_without_ack() {
+        let (session, _sender) = session().await;
+        let error = session
+            .start_response_and_wait(None, Duration::from_millis(100))
+            .await
+            .expect_err("no ack must time out");
+        assert!(matches!(error, VoxRtcError::Timeout(_)));
     }
 
     #[tokio::test]

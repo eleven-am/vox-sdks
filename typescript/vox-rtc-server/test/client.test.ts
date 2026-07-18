@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ChannelState, ConnectionState, VoxRtcServerClient } from "../src/index.js";
+import {
+  ChannelState,
+  ConnectionState,
+  isVoxErrorCode,
+  VOX_ERROR_CODES,
+  VOX_START_ACK_TIMEOUT_CODE,
+  VoxRtcServerClient,
+} from "../src/index.js";
 
 class FakeChannel {
   sent: Array<{ event: string; payload: Record<string, unknown> }> = [];
@@ -341,6 +348,7 @@ test("named event hooks map common Vox events", async () => {
       session_id: "rtc_123",
     },
     responseId: "resp_1",
+    generationId: undefined,
   }]);
   assert.deepEqual(browserEvents, [{
     sessionId: "rtc_123",
@@ -440,6 +448,254 @@ test("onTranscriptDelta maps the transcription delta event", async () => {
     startMs: 10,
     endMs: 20,
   }]);
+});
+
+test("onError parses typed errors with code, recoverable, and generation id", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: unknown[] = [];
+  const off = session.onError((event) => events.push(event));
+
+  fakeSocket.channel.emit("error", {
+    message: "session broke",
+    code: "session_failed",
+    recoverable: false,
+    generation_id: "gen-9",
+    session_id: "rtc_123",
+  });
+  off();
+
+  assert.deepEqual(events, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      message: "session broke",
+      code: "session_failed",
+      recoverable: false,
+      generation_id: "gen-9",
+      session_id: "rtc_123",
+    },
+    message: "session broke",
+    code: "session_failed",
+    recoverable: false,
+    generationId: "gen-9",
+  }]);
+});
+
+test("onError defaults missing recoverable to true for old servers", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: Array<{ code?: string; recoverable: boolean; generationId?: string }> = [];
+  const off = session.onError((event) => events.push(event));
+
+  fakeSocket.channel.emit("error", {
+    message: "legacy failure",
+    session_id: "rtc_123",
+  });
+  off();
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.recoverable, true);
+  assert.equal(events[0]?.code, undefined);
+  assert.equal(events[0]?.generationId, undefined);
+});
+
+test("known error codes are exported and recognized", () => {
+  assert.deepEqual([...VOX_ERROR_CODES], [
+    "response_rejected_turn_state",
+    "response_rejected_user_speech",
+    "response_stale_generation",
+    "response_already_active",
+    "response_failed",
+    "command_invalid",
+    "session_failed",
+  ]);
+  assert.equal(isVoxErrorCode("response_stale_generation"), true);
+  assert.equal(isVoxErrorCode("start_ack_timeout"), false);
+  assert.equal(isVoxErrorCode(42), false);
+});
+
+test("response commands thread an explicit generation id", async () => {
+  const { fakeSocket, session } = await attachedSession();
+
+  session.startResponse({ generationId: "gen-1" });
+  session.appendResponseText("Hello", { generationId: "gen-1" });
+  session.commitResponse({ generationId: "gen-1" });
+  session.cancelResponse({ generationId: "gen-1" });
+  session.replaceResponseText("Replacement", { generationId: "gen-2" });
+
+  assert.deepEqual(fakeSocket.channel.sent, [
+    { event: "response.start", payload: { generation_id: "gen-1" } },
+    { event: "response.delta", payload: { delta: "Hello", generation_id: "gen-1" } },
+    { event: "response.commit", payload: { generation_id: "gen-1" } },
+    { event: "response.cancel", payload: { generation_id: "gen-1" } },
+    { event: "response.replace_text", payload: { text: "Replacement", generation_id: "gen-2" } },
+  ]);
+});
+
+test("sendTextResponse threads the generation id through start, delta, and commit", async () => {
+  const { fakeSocket, session } = await attachedSession();
+
+  session.sendTextResponse("Hi", { cancelFirst: false, generationId: "gen-3" });
+
+  assert.deepEqual(fakeSocket.channel.sent, [
+    { event: "response.start", payload: { generation_id: "gen-3" } },
+    { event: "response.delta", payload: { delta: "Hi", generation_id: "gen-3" } },
+    { event: "response.commit", payload: { generation_id: "gen-3" } },
+  ]);
+});
+
+test("response lifecycle events expose the generation id when present", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const created: unknown[] = [];
+  const cleared: unknown[] = [];
+  const interruptions: unknown[] = [];
+  const offCreated = session.onResponseCreated((event) => created.push(event));
+  const offClear = session.onResponseAudioClear((event) => cleared.push(event));
+  const offInterruption = session.onInterruptionDetected((event) => interruptions.push(event));
+
+  fakeSocket.channel.emit("response.created", {
+    response_id: "resp_1",
+    generation_id: "gen-7",
+    session_id: "rtc_123",
+  });
+  fakeSocket.channel.emit("response.audio.clear", {
+    response_id: "resp_1",
+    generation_id: "gen-7",
+    session_id: "rtc_123",
+  });
+  fakeSocket.channel.emit("interruption.detected", {
+    response_id: "resp_1",
+    generation_id: "gen-7",
+    vad_active_ms: 300,
+    partial_transcript: "wait",
+    session_id: "rtc_123",
+  });
+
+  offCreated();
+  offClear();
+  offInterruption();
+
+  assert.deepEqual(created, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: { response_id: "resp_1", generation_id: "gen-7", session_id: "rtc_123" },
+    responseId: "resp_1",
+    generationId: "gen-7",
+  }]);
+  assert.deepEqual(cleared, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: { response_id: "resp_1", generation_id: "gen-7", session_id: "rtc_123" },
+    responseId: "resp_1",
+    generationId: "gen-7",
+  }]);
+  assert.deepEqual(interruptions, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      response_id: "resp_1",
+      generation_id: "gen-7",
+      vad_active_ms: 300,
+      partial_transcript: "wait",
+      session_id: "rtc_123",
+    },
+    responseId: "resp_1",
+    generationId: "gen-7",
+    vadActiveMs: 300,
+    partialTranscript: "wait",
+  }]);
+});
+
+test("startResponseAndWait resolves on the correlated response.created ack", async () => {
+  const { fakeSocket, session } = await attachedSession();
+
+  const pending = session.startResponseAndWait({ generationId: "gen-ack" });
+  fakeSocket.channel.emit("response.created", {
+    response_id: "resp_other",
+    generation_id: "gen-other",
+    session_id: "rtc_123",
+  });
+  fakeSocket.channel.emit("response.created", {
+    response_id: "resp_9",
+    generation_id: "gen-ack",
+    session_id: "rtc_123",
+  });
+
+  const result = await pending;
+  assert.deepEqual(result, {
+    accepted: true,
+    responseId: "resp_9",
+    generationId: "gen-ack",
+  });
+  assert.deepEqual(fakeSocket.channel.sent, [
+    { event: "response.start", payload: { generation_id: "gen-ack" } },
+  ]);
+});
+
+test("startResponseAndWait generates a generation id when absent", async () => {
+  const { fakeSocket, session } = await attachedSession();
+
+  const pending = session.startResponseAndWait();
+  const generationId = fakeSocket.channel.sent[0]?.payload.generation_id;
+  assert.equal(typeof generationId, "string");
+  assert.ok(String(generationId).length > 0);
+  fakeSocket.channel.emit("response.created", {
+    response_id: "resp_1",
+    generation_id: generationId,
+    session_id: "rtc_123",
+  });
+
+  const result = await pending;
+  assert.deepEqual(result, {
+    accepted: true,
+    responseId: "resp_1",
+    generationId,
+  });
+});
+
+test("startResponseAndWait resolves on the correlated typed error", async () => {
+  const { fakeSocket, session } = await attachedSession();
+
+  const pending = session.startResponseAndWait({ generationId: "gen-rejected" });
+  fakeSocket.channel.emit("error", {
+    message: "turn state cannot accept a response",
+    code: "response_rejected_turn_state",
+    recoverable: true,
+    generation_id: "gen-rejected",
+    session_id: "rtc_123",
+  });
+
+  const result = await pending;
+  assert.deepEqual(result, {
+    accepted: false,
+    error: {
+      code: "response_rejected_turn_state",
+      recoverable: true,
+      message: "turn state cannot accept a response",
+    },
+  });
+});
+
+test("startResponseAndWait ignores uncorrelated errors and resolves on timeout", async () => {
+  const { fakeSocket, session } = await attachedSession();
+
+  const pending = session.startResponseAndWait({ generationId: "gen-timeout", timeoutMs: 20 });
+  fakeSocket.channel.emit("error", {
+    message: "some other failure",
+    code: "command_invalid",
+    recoverable: true,
+    generation_id: "gen-unrelated",
+    session_id: "rtc_123",
+  });
+
+  const result = await pending;
+  assert.deepEqual(result, {
+    accepted: false,
+    error: {
+      code: VOX_START_ACK_TIMEOUT_CODE,
+      recoverable: true,
+      message: "Timed out waiting for response.created ack for gen-timeout",
+    },
+  });
 });
 
 test("onTurnEouPredicted maps the eou prediction event", async () => {

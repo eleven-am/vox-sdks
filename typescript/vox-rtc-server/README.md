@@ -98,3 +98,59 @@ session.sendClientEvent({
 
 `sendClientEvent` is server-to-browser. Browser-originated data-channel events
 arrive through `onBrowserEvent`.
+
+## Generation correlation
+
+`startResponse`, `appendResponseText`, `commitResponse`, `cancelResponse`,
+`replaceResponseText`, and `sendTextResponse` accept an optional `generationId`
+(sent on the wire as `generation_id`). Response lifecycle events
+(`onResponseCreated`, `onResponseCommitted`, `onResponseDone`,
+`onResponseCancelled`, `onResponseAudioClear`, `onInterruptionDetected`,
+`onInterruptionFalsePositive`) expose `generationId` when the server knows it.
+
+Instead of fire-and-forget, gate delta pumping on the start acknowledgement:
+
+```ts
+const result = await session.startResponseAndWait({ timeoutMs: 5_000 });
+if (result.accepted) {
+  session.appendResponseText("Hello.", { generationId: result.generationId });
+  session.commitResponse({ generationId: result.generationId });
+} else {
+  console.warn("start rejected", result.error.code, result.error.message);
+}
+```
+
+`startResponseAndWait` sends `response.start` with a `generationId` (generated
+when not supplied) and resolves on the correlated `response.created`, on the
+correlated typed `error`, or with `{ accepted: false }` and the
+`start_ack_timeout` code when no ack arrives within `timeoutMs` (default
+10 000 ms).
+
+## Error handling
+
+`onError` events carry `message`, a stable `code`, `recoverable`, and an
+optional `generationId` scoping the failure to one response generation. The
+known codes are exported as `VOX_ERROR_CODES` (with the `VoxErrorCode` type and
+the `isVoxErrorCode` guard): `response_rejected_turn_state`,
+`response_rejected_user_speech`, `response_stale_generation`,
+`response_already_active`, `response_failed`, `command_invalid`, and
+`session_failed`.
+
+Only `recoverable === false` (or the transport itself closing) should be
+treated as call-ending. Recoverable errors are per-command failures: handle
+them, abort the affected generation when `generationId` matches, and keep the
+session running. Older Vox servers omit `code` and `recoverable`; the SDK
+defaults `recoverable` to `true` in that case, so a missing field never ends
+the call.
+
+```ts
+session.onError((event) => {
+  if (!event.recoverable) {
+    endCall(event.message);
+    return;
+  }
+  if (event.generationId) {
+    abortGeneration(event.generationId);
+  }
+});
+```

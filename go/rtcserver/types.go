@@ -27,6 +27,16 @@ const (
 	EventTurnStateChanged          = "turn.state_changed"
 )
 
+const (
+	ErrorCodeResponseRejectedTurnState  = "response_rejected_turn_state"
+	ErrorCodeResponseRejectedUserSpeech = "response_rejected_user_speech"
+	ErrorCodeResponseStaleGeneration    = "response_stale_generation"
+	ErrorCodeResponseAlreadyActive      = "response_already_active"
+	ErrorCodeResponseFailed             = "response_failed"
+	ErrorCodeCommandInvalid             = "command_invalid"
+	ErrorCodeSessionFailed              = "session_failed"
+)
+
 type RTCIceServer struct {
 	URLs       interface{} `json:"urls"`
 	Username   string      `json:"username,omitempty"`
@@ -68,6 +78,14 @@ type SessionOptions struct {
 
 type ResponseOptions struct {
 	AllowInterruptions *bool
+	GenerationID       string
+}
+
+type StartAck struct {
+	Accepted     bool
+	ResponseID   string
+	GenerationID string
+	Error        *ErrorEvent
 }
 
 type ClientEvent struct {
@@ -153,10 +171,11 @@ type TurnEouPredictedEvent struct {
 }
 
 type ResponseEvent struct {
-	SessionID   string
-	ChannelName string
-	Data        map[string]interface{}
-	ResponseID  string
+	SessionID    string
+	ChannelName  string
+	Data         map[string]interface{}
+	ResponseID   string
+	GenerationID string
 }
 
 type InterruptionEvent struct {
@@ -184,9 +203,11 @@ type CloseEvent struct {
 }
 
 type ErrorEvent struct {
-	SessionID   string
-	ChannelName string
-	Data        map[string]interface{}
-	Message     string
-	Code        string
+	SessionID    string
+	ChannelName  string
+	Data         map[string]interface{}
+	Message      string
+	Code         string
+	Recoverable  bool
+	GenerationID string
 }

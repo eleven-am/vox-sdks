@@ -22,6 +22,14 @@ pub const EVENT_SPEECH_STOPPED: &str = "input_audio_buffer.speech_stopped";
 pub const EVENT_TRANSCRIPT_DELTA: &str = "conversation.item.input_audio_transcription.delta";
 pub const EVENT_TURN_EOU_PREDICTED: &str = "turn.eou.predicted";
 
+pub const ERROR_CODE_RESPONSE_REJECTED_TURN_STATE: &str = "response_rejected_turn_state";
+pub const ERROR_CODE_RESPONSE_REJECTED_USER_SPEECH: &str = "response_rejected_user_speech";
+pub const ERROR_CODE_RESPONSE_STALE_GENERATION: &str = "response_stale_generation";
+pub const ERROR_CODE_RESPONSE_ALREADY_ACTIVE: &str = "response_already_active";
+pub const ERROR_CODE_RESPONSE_FAILED: &str = "response_failed";
+pub const ERROR_CODE_COMMAND_INVALID: &str = "command_invalid";
+pub const ERROR_CODE_SESSION_FAILED: &str = "session_failed";
+
 pub type EventData = Map<String, Value>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +95,7 @@ pub struct SessionConfig {
 #[derive(Debug, Clone, Default)]
 pub struct ResponseOptions {
     pub allow_interruptions: Option<bool>,
+    pub generation_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +196,7 @@ pub struct ResponseEvent {
     pub channel_name: String,
     pub data: EventData,
     pub response_id: Option<String>,
+    pub generation_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +233,18 @@ pub struct ErrorEvent {
     pub data: EventData,
     pub message: Option<String>,
     pub code: Option<String>,
+    pub recoverable: bool,
+    pub generation_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StartAck {
+    pub accepted: bool,
+    pub generation_id: String,
+    pub response_id: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub recoverable: bool,
 }
 
 pub(crate) fn optional_string(data: &EventData, key: &str) -> Option<String> {
@@ -237,6 +259,14 @@ pub(crate) fn required_string(data: &EventData, key: &str, fallback: &str) -> St
 
 pub(crate) fn optional_number(data: &EventData, key: &str) -> Option<f64> {
     data.get(key).and_then(Value::as_f64)
+}
+
+pub(crate) fn optional_nonempty_string(data: &EventData, key: &str) -> Option<String> {
+    optional_string(data, key).filter(|s| !s.is_empty())
+}
+
+pub(crate) fn recoverable_flag(data: &EventData) -> bool {
+    data.get("recoverable").and_then(Value::as_bool).unwrap_or(true)
 }
 
 pub(crate) fn optional_string_vec(data: &EventData, key: &str) -> Option<Vec<String>> {

@@ -116,6 +116,7 @@ export interface VoxRtcResponseEvent {
   sessionId: string;
   channelName: string;
   responseId?: string;
+  generationId?: string;
   data: Record<string, unknown>;
 }
 
@@ -142,17 +143,46 @@ export interface VoxRtcCloseEvent {
   data: Record<string, unknown>;
 }
 
+export const VOX_ERROR_CODES = Object.freeze([
+  "response_rejected_turn_state",
+  "response_rejected_user_speech",
+  "response_stale_generation",
+  "response_already_active",
+  "response_failed",
+  "command_invalid",
+  "session_failed",
+] as const);
+
+export type VoxErrorCode = (typeof VOX_ERROR_CODES)[number];
+
+export function isVoxErrorCode(code: unknown): code is VoxErrorCode {
+  return typeof code === "string" && (VOX_ERROR_CODES as readonly string[]).includes(code);
+}
+
+export const VOX_START_ACK_TIMEOUT_CODE = "start_ack_timeout";
+
 export interface VoxRtcErrorEvent {
   sessionId: string;
   channelName: string;
   message?: string;
   code?: string;
+  recoverable: boolean;
+  generationId?: string;
   data: Record<string, unknown>;
 }
 
 export interface VoxRtcResponseOptions {
   allowInterruptions?: boolean;
+  generationId?: string;
 }
+
+export interface VoxRtcStartResponseWaitOptions extends VoxRtcResponseOptions {
+  timeoutMs?: number;
+}
+
+export type VoxRtcStartResponseResult =
+  | { accepted: true; responseId?: string; generationId: string }
+  | { accepted: false; error: { code?: string; recoverable: boolean; message?: string } };
 
 export interface VoxRtcSessionOptions {
   joinTimeoutMs?: number;

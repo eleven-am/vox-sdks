@@ -62,3 +62,54 @@ session.Configure(rtcserver.SessionConfig{
 })
 log.Printf("session: %s", bootstrap.SessionID)
 ```
+
+## Response generations and start acknowledgement
+
+Response senders accept an optional caller-chosen generation ID through
+`ResponseOptions.GenerationID` (sent on the wire as `generation_id`). When
+omitted, `StartResponse` generates one and threads it through
+`AppendResponseText`, `CommitResponse`, and `CancelResponse`. Response
+lifecycle events (`response.created`, `response.committed`, `response.done`,
+`response.cancelled`, `response.audio.clear`, `interruption.*`) expose the
+correlated `GenerationID` when the server knows it.
+
+Instead of fire-and-forget, gate delta pumping on the start acknowledgement:
+
+```go
+ack, err := session.StartResponseAndWait(ctx, nil)
+if err != nil { return err }
+if !ack.Accepted {
+	log.Printf("start rejected: %s (%s)", ack.Error.Code, ack.Error.Message)
+	return nil
+}
+session.AppendResponseText("Hello.", &rtcserver.ResponseOptions{GenerationID: ack.GenerationID})
+session.CommitResponse()
+```
+
+`StartResponseAndWait` resolves with the correlated `response.created`
+(`Accepted: true`, plus `ResponseID`) or the correlated typed `error`
+(`Accepted: false`, plus `Error`), and fails only when `ctx` expires first.
+
+## Error handling
+
+`OnError` delivers typed errors with a stable `Code`, a `Recoverable` flag,
+and an optional `GenerationID` scoping the failure to one response generation.
+Only `Recoverable == false` (or the transport connection closing) should end
+the call. Every other error — including all `ErrorCodeResponseRejected*`,
+`ErrorCodeResponseStaleGeneration`, `ErrorCodeResponseAlreadyActive`,
+`ErrorCodeResponseFailed`, and `ErrorCodeCommandInvalid` — is a per-command
+failure: handle it and keep the session running. Old Vox servers omit `code`
+and `recoverable`; the SDK defaults `Recoverable` to `true` in that case, so
+treat those errors as recoverable unless the connection itself closed.
+
+```go
+session.OnError(func(event rtcserver.ErrorEvent) {
+	if !event.Recoverable {
+		session.Close()
+		return
+	}
+	if event.GenerationID != "" {
+		log.Printf("generation %s failed: %s", event.GenerationID, event.Code)
+	}
+})
+```
