@@ -17,6 +17,8 @@ import type {
   WebSocketFactory,
 } from "./types.js";
 import { GatewaySignalingClient } from "./signaling.js";
+import { parseVoxSessionError, voxGenerationId } from "./errors.js";
+import type { VoxRtcSessionError } from "./errors.js";
 
 type ListenerMap = {
   [K in VoxRtcBrowserEventName]?: Set<VoxRtcBrowserHandler<K>>;
@@ -182,9 +184,12 @@ function parseDataMessage(data: unknown): VoxRtcClientEventEnvelope | { raw: unk
   try {
     const parsed = JSON.parse(data);
     if (isRecord(parsed) && typeof parsed.event === "string") {
+      const payload = Object.prototype.hasOwnProperty.call(parsed, "payload") ? parsed.payload : null;
+      const generationId = voxGenerationId(payload);
       return {
         event: parsed.event,
-        payload: Object.prototype.hasOwnProperty.call(parsed, "payload") ? parsed.payload : null,
+        payload,
+        ...(generationId !== undefined ? { generationId } : {}),
       };
     }
     return { raw: parsed };
@@ -292,6 +297,10 @@ export class VoxRtcBrowserClient {
 
   onClientEvent(handler: (event: VoxRtcClientEventEnvelope) => void): Unsubscribe {
     return this.on("clientEvent", handler);
+  }
+
+  onSessionError(handler: (error: VoxRtcSessionError) => void): Unsubscribe {
+    return this.on("sessionError", handler);
   }
 
   async connect(options: VoxRtcBrowserConnectOptions = {}): Promise<VoxRtcBrowserSessionBootstrap> {
@@ -466,6 +475,10 @@ export class VoxRtcBrowserClient {
   #handleSignalingEvent(event: VoxRtcSignalingEvent): void {
     this.#emit("signalingMessage", event);
     this.handleControlEvent({ type: event.type, data: event.data });
+
+    if (event.type === "error") {
+      this.#emit("sessionError", parseVoxSessionError(event.data));
+    }
 
     if (event.type === "rtc.ice_candidate") {
       const candidate = this.#candidateFromSignaling(event.data);

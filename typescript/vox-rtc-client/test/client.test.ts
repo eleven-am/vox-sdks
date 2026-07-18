@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { VoxRtcBrowserClient } from "../src/client.js";
-import type { WebSocketLike } from "../src/types.js";
+import { isFatalVoxError } from "../src/errors.js";
+import type { VoxRtcSessionError } from "../src/errors.js";
+import type { VoxRtcClientEventEnvelope, WebSocketLike } from "../src/types.js";
 
 const READY_SESSION = {
   sessionId: "rtc_private",
@@ -587,6 +589,87 @@ test("unexpected gateway close tears down media and reports closed state", async
   assert.equal(pc.closed, true);
   assert.equal(stream.stopped, true);
   assert.ok(errors.some((message) => message.includes("server_failed")));
+});
+
+test("signaling error frames surface as typed session errors", async () => {
+  const { client, sockets } = createHarness({ onSocket: answerOffers });
+  const errors: VoxRtcSessionError[] = [];
+  client.onSessionError((error) => errors.push(error));
+  await client.connect();
+  const socket = itemAt(sockets, 0, "gateway socket");
+  socket.server("error", {
+    message: "stale generation",
+    code: "response_stale_generation",
+    recoverable: true,
+    generation_id: "gen-42",
+  });
+  socket.server("error", {
+    message: "session died",
+    code: "session_failed",
+    recoverable: false,
+  });
+  socket.server("error", { message: "legacy failure", code: "" });
+  assert.deepEqual(errors, [
+    {
+      message: "stale generation",
+      code: "response_stale_generation",
+      recoverable: true,
+      generationId: "gen-42",
+    },
+    {
+      message: "session died",
+      code: "session_failed",
+      recoverable: false,
+      generationId: undefined,
+    },
+    {
+      message: "legacy failure",
+      code: undefined,
+      recoverable: true,
+      generationId: undefined,
+    },
+  ]);
+  assert.deepEqual(errors.map(isFatalVoxError), [false, true, false]);
+  await client.disconnect();
+});
+
+test("data-channel response and interruption events expose generationId", async () => {
+  const { client } = createHarness({ onSocket: answerOffers });
+  const events: VoxRtcClientEventEnvelope[] = [];
+  client.onClientEvent((event) => events.push(event));
+  await client.connect();
+  const channel = itemAt(
+    MockPeerConnection.instances,
+    0,
+    "peer connection",
+  ).dataChannel;
+  const deliver = (event: string, payload: Record<string, unknown>) => {
+    channel.onmessage?.({
+      data: JSON.stringify({ event, payload }),
+    } as MessageEvent<string>);
+  };
+  deliver("response.created", { response_id: "resp-1", generation_id: "gen-1" });
+  deliver("response.done", { generation_id: "gen-1" });
+  deliver("response.cancelled", { generation_id: "gen-2" });
+  deliver("response.audio.clear", { generation_id: "gen-2" });
+  deliver("interruption.detected", { generation_id: "gen-2", vad_active_ms: 120 });
+  deliver("interruption.false_positive", { generation_id: "gen-3" });
+  deliver("response.created", { response_id: "resp-legacy" });
+  deliver("turn.state_changed", { state: "listening" });
+  assert.deepEqual(
+    events.map((event) => [event.event, event.generationId]),
+    [
+      ["response.created", "gen-1"],
+      ["response.done", "gen-1"],
+      ["response.cancelled", "gen-2"],
+      ["response.audio.clear", "gen-2"],
+      ["interruption.detected", "gen-2"],
+      ["interruption.false_positive", "gen-3"],
+      ["response.created", undefined],
+      ["turn.state_changed", undefined],
+    ],
+  );
+  await client.disconnect();
 });
 
 test("repeated connect and disconnect creates one clean gateway session per cycle", async () => {

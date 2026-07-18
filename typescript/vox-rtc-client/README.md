@@ -83,6 +83,51 @@ Browser-to-server events use the same data channel and arrive on the server as
 client.sendEvent({ event: "ui.select", payload: { id: "choice-a" } });
 ```
 
+## Error handling
+
+Vox session `error` frames arrive over the gateway signaling socket and are
+surfaced as typed session errors:
+
+```ts
+import { isFatalVoxError, isVoxErrorCode } from "@eleven-am/vox-rtc-client";
+
+client.onSessionError((error) => {
+  if (isFatalVoxError(error)) {
+    endCallUi(error.message ?? "Call session error");
+    return;
+  }
+  console.warn("recoverable Vox error", error.code, error.generationId);
+});
+```
+
+Each session error carries `message`, `code`, `recoverable`, and
+`generationId`. `code` values are the stable contract set exported as
+`VOX_ERROR_CODES` (check membership with `isVoxErrorCode`). Old Vox servers
+omit `code` and `recoverable`; the SDK normalizes an empty `code` to
+`undefined` and treats missing `recoverable` as `true`.
+
+Only a fatal error (`recoverable === false`, which includes
+`code === "session_failed"`) or an actual transport/connection failure (the
+`error` event, an unexpected gateway close, or a failed `connect()`) should end
+the call UI. Recoverable errors are per-command failures: the session stays
+healthy, so handle them in place — for example, stop pumping the generation
+named by `generationId` after a `response_stale_generation` error — and keep
+the call running.
+
+Browser-native data-channel events correlated to a response
+(`response.created`, `response.done`, `response.cancelled`,
+`response.audio.clear`, `interruption.detected`,
+`interruption.false_positive`) expose `generationId` on the envelope when the
+server supplies one:
+
+```ts
+client.onClientEvent(({ event, generationId }) => {
+  if (event === "response.cancelled" && generationId) {
+    abortGeneration(generationId);
+  }
+});
+```
+
 ## Audio ducking
 
 Audio ducking changes playback volume while Vox decides whether detected speech

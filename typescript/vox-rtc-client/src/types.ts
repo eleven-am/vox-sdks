@@ -1,3 +1,5 @@
+import type { VoxRtcSessionError } from "./errors.js";
+
 export interface VoxRtcBrowserSessionBootstrap {
   sessionId: string;
   iceServers: RTCIceServer[];
@@ -26,6 +28,7 @@ export interface VoxRtcBrowserConnectOptions {
 export interface VoxRtcClientEventEnvelope {
   event: string;
   payload?: unknown;
+  generationId?: string;
 }
 
 export type VoxRtcAudioDuckingMode = "vox" | "local" | "hybrid";
@@ -61,6 +64,7 @@ export interface VoxRtcBrowserState {
 export interface VoxRtcBrowserEvents {
   state: VoxRtcBrowserState;
   error: Error;
+  sessionError: VoxRtcSessionError;
   session: VoxRtcBrowserSessionBootstrap;
   remoteStream: MediaStream;
   remoteTrack: RTCTrackEvent;
