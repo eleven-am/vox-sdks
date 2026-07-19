@@ -3,6 +3,7 @@ defmodule VoxRtcServer.Protocol do
 
   alias VoxRtcServer.{
     Bootstrap,
+    ErrorEvent,
     Event,
     IceCandidate,
     IceServer,
@@ -80,7 +81,8 @@ defmodule VoxRtcServer.Protocol do
   @spec response_start(ResponseOptions.t()) :: Vox.RtcControlClientMessage.t()
   def response_start(%ResponseOptions{} = options) do
     control(:response_start, %Vox.ConversationResponseStart{
-      allow_interruptions: options.allow_interruptions
+      allow_interruptions: options.allow_interruptions,
+      generation_id: options.generation_id || ""
     })
   end
 
@@ -88,18 +90,23 @@ defmodule VoxRtcServer.Protocol do
   def response_delta(delta, %ResponseOptions{} = options) do
     control(:response_delta, %Vox.ConversationResponseDelta{
       delta: delta,
-      allow_interruptions: options.allow_interruptions
+      allow_interruptions: options.allow_interruptions,
+      generation_id: options.generation_id || ""
     })
   end
 
-  @spec response_commit() :: Vox.RtcControlClientMessage.t()
-  def response_commit do
-    control(:response_commit, %Vox.ConversationResponseCommit{})
+  @spec response_commit(ResponseOptions.t()) :: Vox.RtcControlClientMessage.t()
+  def response_commit(%ResponseOptions{} = options) do
+    control(:response_commit, %Vox.ConversationResponseCommit{
+      generation_id: options.generation_id || ""
+    })
   end
 
-  @spec response_cancel() :: Vox.RtcControlClientMessage.t()
-  def response_cancel do
-    control(:response_cancel, %Vox.ConversationResponseCancel{})
+  @spec response_cancel(ResponseOptions.t()) :: Vox.RtcControlClientMessage.t()
+  def response_cancel(%ResponseOptions{} = options) do
+    control(:response_cancel, %Vox.ConversationResponseCancel{
+      generation_id: options.generation_id || ""
+    })
   end
 
   @spec response_replace_text(String.t(), ResponseOptions.t()) ::
@@ -160,7 +167,7 @@ defmodule VoxRtcServer.Protocol do
     do: decode_conversation_event(payload, session_id)
 
   defp decode_server_event(:error, payload, session_id),
-    do: event(:error, %{message: payload.message}, session_id)
+    do: event(:error, error_event(payload), session_id)
 
   defp decode_server_event(:closed, payload, session_id),
     do: event(:closed, %{reason: payload.reason}, session_id)
@@ -195,6 +202,7 @@ defmodule VoxRtcServer.Protocol do
 
   defp decode_conversation_event(%Vox.ConverseServerMessage{msg: {kind, payload}}, session_id) do
     case Map.fetch(@conversation_events, kind) do
+      {:ok, :error} -> event(:error, error_event(payload), session_id)
       {:ok, type} -> event(type, payload, session_id)
       :error -> {:error, {:unknown_conversation_event, kind}}
     end
@@ -217,6 +225,15 @@ defmodule VoxRtcServer.Protocol do
 
   defp event(type, payload, session_id),
     do: {:ok, %Event{type: type, payload: payload, session_id: session_id}}
+
+  defp error_event(payload) do
+    %ErrorEvent{
+      message: payload.message,
+      code: empty_to_nil(payload.code),
+      recoverable: payload.recoverable,
+      generation_id: empty_to_nil(payload.generation_id)
+    }
+  end
 
   defp control(kind, payload), do: %Vox.RtcControlClientMessage{msg: {kind, payload}}
 

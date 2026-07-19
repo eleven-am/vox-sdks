@@ -669,6 +669,9 @@ defmodule Vox.RtcSignalingError do
     syntax: :proto3
 
   field(:message, 1, type: :string)
+  field(:code, 2, type: :string)
+  field(:recoverable, 3, type: :bool)
+  field(:generation_id, 4, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.RtcWireEvent do
@@ -960,6 +963,7 @@ defmodule Vox.ConversationResponseCommitted do
     syntax: :proto3
 
   field(:response_id, 1, type: :string, json_name: "responseId")
+  field(:generation_id, 2, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationTurnPolicy do
@@ -1108,6 +1112,8 @@ defmodule Vox.ConversationResponseStart do
     type: :bool,
     json_name: "allowInterruptions"
   )
+
+  field(:generation_id, 2, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationResponseDelta do
@@ -1125,6 +1131,8 @@ defmodule Vox.ConversationResponseDelta do
     type: :bool,
     json_name: "allowInterruptions"
   )
+
+  field(:generation_id, 3, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationResponseCommit do
@@ -1134,6 +1142,8 @@ defmodule Vox.ConversationResponseCommit do
     full_name: "vox.ConversationResponseCommit",
     protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
+
+  field(:generation_id, 1, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationResponseCancel do
@@ -1143,6 +1153,8 @@ defmodule Vox.ConversationResponseCancel do
     full_name: "vox.ConversationResponseCancel",
     protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
+
+  field(:generation_id, 1, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationResponseReplaceText do
@@ -1236,6 +1248,7 @@ defmodule Vox.ConversationResponseCreated do
     syntax: :proto3
 
   field(:response_id, 1, type: :string, json_name: "responseId")
+  field(:generation_id, 2, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationAudioDelta do
@@ -1261,6 +1274,7 @@ defmodule Vox.ConversationAudioClear do
     syntax: :proto3
 
   field(:response_id, 1, type: :string, json_name: "responseId")
+  field(:generation_id, 2, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationInterruptionDetected do
@@ -1274,6 +1288,7 @@ defmodule Vox.ConversationInterruptionDetected do
   field(:response_id, 1, type: :string, json_name: "responseId")
   field(:vad_active_ms, 2, type: :uint32, json_name: "vadActiveMs")
   field(:partial_transcript, 3, type: :string, json_name: "partialTranscript")
+  field(:generation_id, 4, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationInterruptionFalsePositive do
@@ -1288,6 +1303,7 @@ defmodule Vox.ConversationInterruptionFalsePositive do
   field(:vad_active_ms, 2, type: :uint32, json_name: "vadActiveMs")
   field(:partial_transcript, 3, type: :string, json_name: "partialTranscript")
   field(:reason, 4, type: :string)
+  field(:generation_id, 5, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationTurnEouPredicted do
@@ -1317,6 +1333,7 @@ defmodule Vox.ConversationResponseDone do
     syntax: :proto3
 
   field(:response_id, 1, type: :string, json_name: "responseId")
+  field(:generation_id, 2, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationResponseCancelled do
@@ -1328,6 +1345,7 @@ defmodule Vox.ConversationResponseCancelled do
     syntax: :proto3
 
   field(:response_id, 1, type: :string, json_name: "responseId")
+  field(:generation_id, 2, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationStateChanged do
@@ -1351,6 +1369,9 @@ defmodule Vox.ConversationError do
     syntax: :proto3
 
   field(:message, 1, type: :string)
+  field(:code, 2, type: :string)
+  field(:recoverable, 3, type: :bool)
+  field(:generation_id, 4, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.HealthService.Service do

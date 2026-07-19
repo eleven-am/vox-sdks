@@ -9,12 +9,14 @@ defmodule VoxRtcServer.Session do
   use GenServer
 
   alias VoxRtcServer.{
+    ErrorEvent,
     Event,
     IceCandidate,
     Protocol,
     ResponseOptions,
     SessionConfig,
-    SessionDescription
+    SessionDescription,
+    StartAck
   }
 
   @type t :: pid()
@@ -39,6 +41,9 @@ defmodule VoxRtcServer.Session do
     closed_emitted?: false,
     terminal_error: nil,
     attach_waiters: [],
+    response_generation_counter: 0,
+    response_generation_id: nil,
+    response_waiters: %{},
     subscribers: %{},
     subscriber_monitors: %{}
   ]
@@ -74,21 +79,34 @@ defmodule VoxRtcServer.Session do
 
   @spec start_response(t(), ResponseOptions.t()) :: :ok | {:error, term()}
   def start_response(session, options \\ %ResponseOptions{}),
-    do: send_control(session, Protocol.response_start(options))
+    do: response_command(session, :start, nil, options)
+
+  @spec start_response_and_wait(t(), ResponseOptions.t(), non_neg_integer()) ::
+          {:ok, StartAck.t()} | {:error, ErrorEvent.t()} | {:error, term()}
+  def start_response_and_wait(session, options \\ %ResponseOptions{}, timeout \\ 5_000)
+      when is_integer(timeout) and timeout >= 0 do
+    GenServer.call(
+      session,
+      {:start_response_and_wait, options, timeout},
+      timeout + 1_000
+    )
+  end
 
   @spec append_response_text(t(), String.t(), ResponseOptions.t()) :: :ok | {:error, term()}
   def append_response_text(session, delta, options \\ %ResponseOptions{}) when is_binary(delta),
-    do: send_control(session, Protocol.response_delta(delta, options))
+    do: response_command(session, :delta, delta, options)
 
-  @spec commit_response(t()) :: :ok | {:error, term()}
-  def commit_response(session), do: send_control(session, Protocol.response_commit())
+  @spec commit_response(t(), ResponseOptions.t()) :: :ok | {:error, term()}
+  def commit_response(session, options \\ %ResponseOptions{}),
+    do: response_command(session, :commit, nil, options)
 
-  @spec cancel_response(t()) :: :ok | {:error, term()}
-  def cancel_response(session), do: send_control(session, Protocol.response_cancel())
+  @spec cancel_response(t(), ResponseOptions.t()) :: :ok | {:error, term()}
+  def cancel_response(session, options \\ %ResponseOptions{}),
+    do: response_command(session, :cancel, nil, options)
 
   @spec replace_response_text(t(), String.t(), ResponseOptions.t()) :: :ok | {:error, term()}
   def replace_response_text(session, text, options \\ %ResponseOptions{}) when is_binary(text),
-    do: send_control(session, Protocol.response_replace_text(text, options))
+    do: response_command(session, :replace_text, text, options)
 
   @spec send_client_event(t(), String.t(), map()) :: :ok | {:error, term()}
   def send_client_event(session, event, payload \\ %{}) do
@@ -158,6 +176,55 @@ defmodule VoxRtcServer.Session do
   def handle_call({:unsubscribe, subscriber}, _from, state),
     do: {:reply, :ok, remove_subscriber(state, subscriber)}
 
+  def handle_call(
+        {:response_command, _command, _value, _options},
+        _from,
+        %{closing?: true} = state
+      ),
+      do: {:reply, {:error, :session_closed}, state}
+
+  def handle_call({:response_command, command, value, options}, _from, state) do
+    {message, next_state} = build_response_command(state, command, value, options)
+
+    case state.transport.send_request(state.stream, message) do
+      {:ok, stream} -> {:reply, :ok, %{next_state | stream: stream}}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call(
+        {:start_response_and_wait, _options, _timeout},
+        _from,
+        %{closing?: true} = state
+      ),
+      do: {:reply, {:error, :session_closed}, state}
+
+  def handle_call({:start_response_and_wait, options, timeout}, from, state) do
+    {options, next_state} = ensure_generation(state, options)
+    generation_id = options.generation_id
+
+    if Map.has_key?(state.response_waiters, generation_id) do
+      error = %ErrorEvent{
+        message: "A response start is already awaiting this generation",
+        code: "command_invalid",
+        recoverable: true,
+        generation_id: generation_id
+      }
+
+      {:reply, {:error, error}, state}
+    else
+      case state.transport.send_request(state.stream, Protocol.response_start(options)) do
+        {:ok, stream} ->
+          timer = Process.send_after(self(), {:response_start_timeout, generation_id}, timeout)
+          waiters = Map.put(state.response_waiters, generation_id, {from, timer})
+          {:noreply, %{next_state | stream: stream, response_waiters: waiters}}
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
   def handle_call({:send, _message}, _from, %{closing?: true} = state),
     do: {:reply, {:error, :session_closed}, state}
 
@@ -188,7 +255,11 @@ defmodule VoxRtcServer.Session do
         end
 
       {:ok, %Event{type: :closed, payload: payload} = event} ->
-        state = broadcast(%{state | closed_emitted?: true, closing?: true}, event)
+        state =
+          state
+          |> reject_response_waiters("Session closed before Vox acknowledged the response", false)
+          |> then(&broadcast(%{&1 | closed_emitted?: true, closing?: true}, event))
+
         reply_attach_waiters(state, {:error, {:closed, payload.reason}})
 
         if state.attached? do
@@ -198,6 +269,7 @@ defmodule VoxRtcServer.Session do
         end
 
       {:ok, event} ->
+        state = state |> resolve_response_waiter(event) |> track_response_completion(event)
         {:noreply, broadcast(state, event)}
 
       {:error, reason} ->
@@ -210,13 +282,36 @@ defmodule VoxRtcServer.Session do
 
   def handle_info({:vox_rtc_stream_done, receiver}, %{receiver: receiver} = state) do
     reason = if state.closing?, do: "client_closed", else: "transport_closed"
-    state = emit_closed_once(state, reason)
+
+    state =
+      state
+      |> reject_response_waiters("RTC control stream closed before acknowledgement", false)
+      |> emit_closed_once(reason)
+
     reply_attach_waiters(state, {:error, :stream_closed})
 
     if state.attached? do
       {:stop, :normal, %{state | attach_waiters: []}}
     else
       {:noreply, %{state | attach_waiters: [], terminal_error: :stream_closed}}
+    end
+  end
+
+  def handle_info({:response_start_timeout, generation_id}, state) do
+    case Map.pop(state.response_waiters, generation_id) do
+      {nil, _waiters} ->
+        {:noreply, state}
+
+      {{from, _timer}, waiters} ->
+        error = %ErrorEvent{
+          message: "Timed out waiting for response.created acknowledgement",
+          code: "start_ack_timeout",
+          recoverable: true,
+          generation_id: generation_id
+        }
+
+        GenServer.reply(from, {:error, error})
+        {:noreply, %{state | response_waiters: waiters}}
     end
   end
 
@@ -253,6 +348,8 @@ defmodule VoxRtcServer.Session do
 
   @impl true
   def terminate(_reason, state) do
+    reject_response_waiters(state, "RTC session terminated before acknowledgement", false)
+
     if state.receiver && Process.alive?(state.receiver),
       do: Process.exit(state.receiver, :shutdown)
 
@@ -264,6 +361,133 @@ defmodule VoxRtcServer.Session do
   end
 
   defp send_control(session, message), do: GenServer.call(session, {:send, message})
+
+  defp response_command(session, command, value, options),
+    do: GenServer.call(session, {:response_command, command, value, options})
+
+  defp build_response_command(state, :start, _value, options) do
+    {options, state} = ensure_generation(state, options)
+    {Protocol.response_start(options), state}
+  end
+
+  defp build_response_command(state, :delta, delta, options) do
+    options = current_generation(state, options)
+    {Protocol.response_delta(delta, options), state}
+  end
+
+  defp build_response_command(state, :commit, _value, options) do
+    options = current_generation(state, options)
+    {Protocol.response_commit(options), state}
+  end
+
+  defp build_response_command(state, :cancel, _value, options) do
+    options = current_generation(state, options)
+
+    next_state =
+      if is_nil(options.generation_id) or options.generation_id == state.response_generation_id,
+        do: %{state | response_generation_id: nil},
+        else: state
+
+    {Protocol.response_cancel(options), next_state}
+  end
+
+  defp build_response_command(state, :replace_text, text, options) do
+    {Protocol.response_replace_text(text, options), %{state | response_generation_id: nil}}
+  end
+
+  defp ensure_generation(state, %ResponseOptions{generation_id: generation_id} = options)
+       when is_binary(generation_id) and generation_id != "" do
+    {options, %{state | response_generation_id: generation_id}}
+  end
+
+  defp ensure_generation(state, %ResponseOptions{} = options) do
+    counter = state.response_generation_counter + 1
+    unique = System.unique_integer([:positive, :monotonic]) |> Integer.to_string(36)
+    generation_id = "generation_#{Integer.to_string(counter, 36)}_#{unique}"
+
+    {%ResponseOptions{options | generation_id: generation_id},
+     %{state | response_generation_counter: counter, response_generation_id: generation_id}}
+  end
+
+  defp current_generation(state, %ResponseOptions{generation_id: nil} = options),
+    do: %ResponseOptions{options | generation_id: state.response_generation_id}
+
+  defp current_generation(_state, options), do: options
+
+  defp resolve_response_waiter(
+         state,
+         %Event{
+           type: :response_created,
+           payload: %Vox.ConversationResponseCreated{
+             response_id: response_id,
+             generation_id: generation_id
+           }
+         }
+       ) do
+    reply_response_waiter(
+      state,
+      generation_id,
+      {:ok, %StartAck{response_id: empty_to_nil(response_id), generation_id: generation_id}}
+    )
+  end
+
+  defp resolve_response_waiter(
+         state,
+         %Event{type: :error, payload: %ErrorEvent{generation_id: generation_id} = error}
+       ) do
+    reply_response_waiter(state, generation_id, {:error, error})
+  end
+
+  defp resolve_response_waiter(state, _event), do: state
+
+  defp reply_response_waiter(state, generation_id, reply)
+       when is_binary(generation_id) and generation_id != "" do
+    case Map.pop(state.response_waiters, generation_id) do
+      {nil, _waiters} ->
+        state
+
+      {{from, timer}, waiters} ->
+        Process.cancel_timer(timer)
+        GenServer.reply(from, reply)
+        %{state | response_waiters: waiters}
+    end
+  end
+
+  defp reply_response_waiter(state, _generation_id, _reply), do: state
+
+  defp track_response_completion(
+         %{response_generation_id: generation_id} = state,
+         %Event{type: type, payload: payload}
+       )
+       when type in [:response_done, :response_cancelled] do
+    if Map.get(payload, :generation_id) == generation_id,
+      do: %{state | response_generation_id: nil},
+      else: state
+  end
+
+  defp track_response_completion(state, _event), do: state
+
+  defp reject_response_waiters(state, message, recoverable) do
+    Enum.each(state.response_waiters, fn {generation_id, {from, timer}} ->
+      Process.cancel_timer(timer)
+
+      GenServer.reply(
+        from,
+        {:error,
+         %ErrorEvent{
+           message: message,
+           code: "session_failed",
+           recoverable: recoverable,
+           generation_id: generation_id
+         }}
+      )
+    end)
+
+    %{state | response_waiters: %{}}
+  end
+
+  defp empty_to_nil(""), do: nil
+  defp empty_to_nil(value), do: value
 
   defp start_receiver(transport, stream, session) do
     {:ok, receiver} =
@@ -290,7 +514,10 @@ defmodule VoxRtcServer.Session do
   end
 
   defp close_transport(state, reason) do
-    state = %{state | closing?: true}
+    state =
+      state
+      |> reject_response_waiters("RTC session closed before acknowledgement", false)
+      |> then(&%{&1 | closing?: true})
 
     state =
       case state.transport.send_request(state.stream, Protocol.close(reason)) do
@@ -305,6 +532,7 @@ defmodule VoxRtcServer.Session do
 
   defp stop_for_stream_error(state, reason) do
     state.transport.cancel(state.stream)
+    state = reject_response_waiters(state, "RTC control stream failed: #{inspect(reason)}", false)
     state = broadcast(state, error_event(state, reason))
     state = emit_closed_once(%{state | closing?: true}, "transport_error")
     reply_attach_waiters(state, {:error, reason})

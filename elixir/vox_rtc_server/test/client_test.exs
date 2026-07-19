@@ -3,12 +3,14 @@ defmodule VoxRtcServer.ClientTest do
 
   alias VoxRtcServer.{
     Client,
+    ErrorEvent,
     Event,
     IceCandidate,
     ResponseOptions,
     Session,
     SessionConfig,
-    SessionDescription
+    SessionDescription,
+    StartAck
   }
 
   setup do
@@ -87,7 +89,7 @@ defmodule VoxRtcServer.ClientTest do
                     %Vox.RtcControlClientMessage{msg: {:candidates_complete, _complete}}}
   end
 
-  test "streams generative response commands and client events over the same control stream", %{
+  test "streams one response generation over the ordered control stream", %{
     client: client
   } do
     {_bootstrap, session, stream, _receiver} = create_attached_session(client)
@@ -96,30 +98,191 @@ defmodule VoxRtcServer.ClientTest do
     assert :ok = Session.start_response(session, options)
     assert :ok = Session.append_response_text(session, "Hello", options)
     assert :ok = Session.append_response_text(session, " world", options)
-    assert :ok = Session.replace_response_text(session, "Hello world", options)
     assert :ok = Session.commit_response(session)
     assert :ok = Session.cancel_response(session)
 
     assert :ok =
              Session.send_client_event(session, "application.context", %{document_id: "doc-1"})
 
-    kinds =
-      for _ <- 1..7 do
-        assert_receive {:control_sent, ^stream,
-                        %Vox.RtcControlClientMessage{msg: {kind, _payload}}}
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_start, start}}}
 
-        kind
-      end
+    assert is_binary(start.generation_id)
+    assert start.generation_id != ""
+    assert start.allow_interruptions
 
-    assert kinds == [
-             :response_start,
-             :response_delta,
-             :response_delta,
-             :response_replace_text,
-             :response_commit,
-             :response_cancel,
-             :client_event
-           ]
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_delta, first_delta}}}
+
+    assert first_delta.delta == "Hello"
+    assert first_delta.generation_id == start.generation_id
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_delta, second_delta}}}
+
+    assert second_delta.delta == " world"
+    assert second_delta.generation_id == start.generation_id
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_commit, commit}}}
+
+    assert commit.generation_id == start.generation_id
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_cancel, cancel}}}
+
+    assert cancel.generation_id == start.generation_id
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:client_event, client_event}}}
+
+    assert client_event.event == "application.context"
+  end
+
+  test "preserves an explicit response generation", %{client: client} do
+    {_bootstrap, session, stream, _receiver} = create_attached_session(client)
+    options = %ResponseOptions{generation_id: "generation-explicit"}
+
+    assert :ok = Session.start_response(session, options)
+    assert :ok = Session.append_response_text(session, "Hello", %ResponseOptions{})
+    assert :ok = Session.commit_response(session)
+
+    for expected_kind <- [:response_start, :response_delta, :response_commit] do
+      assert_receive {:control_sent, ^stream,
+                      %Vox.RtcControlClientMessage{
+                        msg: {^expected_kind, %{generation_id: "generation-explicit"}}
+                      }}
+    end
+  end
+
+  test "waits for the matching response.created acknowledgement", %{client: client} do
+    {_bootstrap, session, stream, receiver} = create_attached_session(client)
+
+    task =
+      Task.async(fn ->
+        Session.start_response_and_wait(session, %ResponseOptions{}, 1_000)
+      end)
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_start, start}}}
+
+    send_conversation(receiver, stream, :response_created, %Vox.ConversationResponseCreated{
+      response_id: "response-stale",
+      generation_id: "generation-stale"
+    })
+
+    assert_receive {:vox_rtc, ^session,
+                    %Event{
+                      type: :response_created,
+                      payload: %Vox.ConversationResponseCreated{
+                        generation_id: "generation-stale"
+                      }
+                    }}
+
+    assert Task.yield(task, 20) == nil
+
+    send_conversation(receiver, stream, :response_created, %Vox.ConversationResponseCreated{
+      response_id: "response-current",
+      generation_id: start.generation_id
+    })
+
+    assert {:ok,
+            %StartAck{
+              response_id: "response-current",
+              generation_id: generation_id
+            }} = Task.await(task)
+
+    assert generation_id == start.generation_id
+  end
+
+  test "returns and broadcasts a correlated typed response rejection", %{client: client} do
+    {_bootstrap, session, stream, receiver} = create_attached_session(client)
+
+    task =
+      Task.async(fn ->
+        Session.start_response_and_wait(
+          session,
+          %ResponseOptions{generation_id: "generation-rejected"},
+          1_000
+        )
+      end)
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{
+                      msg:
+                        {:response_start,
+                         %Vox.ConversationResponseStart{
+                           generation_id: "generation-rejected"
+                         }}
+                    }}
+
+    send_conversation(receiver, stream, :error, %Vox.ConversationError{
+      message: "Response start no longer matches the active turn",
+      code: "response_stale_generation",
+      recoverable: true,
+      generation_id: "generation-rejected"
+    })
+
+    assert {:error,
+            %ErrorEvent{
+              code: "response_stale_generation",
+              recoverable: true,
+              generation_id: "generation-rejected"
+            }} = Task.await(task)
+
+    assert_receive {:vox_rtc, ^session,
+                    %Event{
+                      type: :error,
+                      payload: %ErrorEvent{
+                        message: "Response start no longer matches the active turn",
+                        code: "response_stale_generation",
+                        recoverable: true,
+                        generation_id: "generation-rejected"
+                      }
+                    }}
+  end
+
+  test "returns a typed timeout when response.start is not acknowledged", %{client: client} do
+    {_bootstrap, session, stream, _receiver} = create_attached_session(client)
+
+    task = Task.async(fn -> Session.start_response_and_wait(session, %ResponseOptions{}, 10) end)
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_start, start}}}
+
+    assert {:error,
+            %ErrorEvent{
+              code: "start_ack_timeout",
+              recoverable: true,
+              generation_id: generation_id
+            }} = Task.await(task)
+
+    assert generation_id == start.generation_id
+  end
+
+  test "releases a response waiter when the control stream closes", %{client: client} do
+    {_bootstrap, session, stream, receiver} = create_attached_session(client)
+
+    task =
+      Task.async(fn ->
+        Session.start_response_and_wait(
+          session,
+          %ResponseOptions{generation_id: "generation-closed"},
+          1_000
+        )
+      end)
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_start, _start}}}
+
+    send(receiver, {:server_done, stream.reference})
+
+    assert {:error,
+            %ErrorEvent{
+              code: "session_failed",
+              recoverable: false,
+              generation_id: "generation-closed"
+            }} = Task.await(task)
   end
 
   test "delivers typed signaling, conversation, browser, and malformed wire events", %{
@@ -177,6 +340,28 @@ defmodule VoxRtcServer.ClientTest do
                     %Event{
                       type: :wire_event,
                       payload: %{name: "custom", raw_payload: "not-json", decode_error: _error}
+                    }}
+
+    send_server(receiver, stream, %Vox.RtcControlServerMessage{
+      msg:
+        {:error,
+         %Vox.RtcSignalingError{
+           message: "Offer generation is stale",
+           code: "response_stale_generation",
+           recoverable: true,
+           generation_id: "generation-signaling"
+         }}
+    })
+
+    assert_receive {:vox_rtc, ^session,
+                    %Event{
+                      type: :error,
+                      payload: %ErrorEvent{
+                        message: "Offer generation is stale",
+                        code: "response_stale_generation",
+                        recoverable: true,
+                        generation_id: "generation-signaling"
+                      }
                     }}
   end
 
@@ -310,5 +495,11 @@ defmodule VoxRtcServer.ClientTest do
 
   defp send_server(receiver, stream, message) do
     send(receiver, {:server_item, stream.reference, {:ok, message}})
+  end
+
+  defp send_conversation(receiver, stream, kind, payload) do
+    send_server(receiver, stream, %Vox.RtcControlServerMessage{
+      msg: {:conversation, %Vox.ConverseServerMessage{msg: {kind, payload}}}
+    })
   end
 end

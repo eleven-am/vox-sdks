@@ -106,9 +106,54 @@ end
 defmodule VoxRtcServer.ResponseOptions do
   @moduledoc "Response generation options."
 
-  defstruct [:allow_interruptions]
+  defstruct [:allow_interruptions, :generation_id]
 
-  @type t :: %__MODULE__{allow_interruptions: boolean() | nil}
+  @type t :: %__MODULE__{
+          allow_interruptions: boolean() | nil,
+          generation_id: String.t() | nil
+        }
+end
+
+defmodule VoxRtcServer.ErrorEvent do
+  @moduledoc "A structured error emitted by Vox signaling or conversation control."
+
+  @known_codes [
+    "response_rejected_turn_state",
+    "response_rejected_user_speech",
+    "response_stale_generation",
+    "response_already_active",
+    "response_failed",
+    "command_invalid",
+    "session_failed"
+  ]
+
+  @enforce_keys [:message, :recoverable]
+  defstruct [:message, :code, :generation_id, recoverable: true]
+
+  @type t :: %__MODULE__{
+          message: String.t(),
+          code: String.t() | nil,
+          recoverable: boolean(),
+          generation_id: String.t() | nil
+        }
+
+  @spec known_codes() :: [String.t()]
+  def known_codes, do: @known_codes
+
+  @spec known_code?(term()) :: boolean()
+  def known_code?(code), do: code in @known_codes
+end
+
+defmodule VoxRtcServer.StartAck do
+  @moduledoc "Vox acknowledgement for a generation-aware response start."
+
+  @enforce_keys [:generation_id]
+  defstruct [:response_id, :generation_id]
+
+  @type t :: %__MODULE__{
+          response_id: String.t() | nil,
+          generation_id: String.t()
+        }
 end
 
 defmodule VoxRtcServer.Event do

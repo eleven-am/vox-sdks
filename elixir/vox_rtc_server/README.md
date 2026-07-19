@@ -20,7 +20,7 @@ Add the package to `mix.exs`:
 ```elixir
 def deps do
   [
-    {:vox_rtc_server, "~> 0.1.0"}
+    {:vox_rtc_server, "~> 0.2.0"}
   ]
 end
 ```
@@ -126,15 +126,49 @@ alias VoxRtcServer.{ResponseOptions, Session}
 
 options = %ResponseOptions{allow_interruptions: true}
 
-:ok = Session.start_response(session, options)
-:ok = Session.append_response_text(session, "The first generated phrase", options)
-:ok = Session.append_response_text(session, " and the next phrase.", options)
-:ok = Session.commit_response(session)
+case Session.start_response_and_wait(session, options, 5_000) do
+  {:ok, ack} ->
+    response = %ResponseOptions{
+      allow_interruptions: true,
+      generation_id: ack.generation_id
+    }
+
+    :ok = Session.append_response_text(session, "The first generated phrase", response)
+    :ok = Session.append_response_text(session, " and the next phrase.", response)
+    :ok = Session.commit_response(session, response)
+
+  {:error, %VoxRtcServer.ErrorEvent{} = error} ->
+    Logger.warning("Vox rejected response start", code: error.code)
+end
 ```
 
-Use `cancel_response/1` to cancel an active response and
+`start_response_and_wait/3` generates a `generation_id` when one is not
+provided, sends `response.start`, and waits for the matching
+`response.created` acknowledgement. A correlated rejection, acknowledgement
+timeout, or control-stream failure returns `{:error, %VoxRtcServer.ErrorEvent{}}`.
+An event from a stale generation cannot resolve the wait.
+
+The session automatically carries the active generation through subsequent
+delta, commit, and cancel commands, so passing the returned id explicitly is
+optional. Passing it explicitly is useful when application work is concurrent
+because Vox can reject stale work without affecting the current response.
+
+`Session.start_response/2` remains available for fire-and-forget control. Use
+`cancel_response/2` to cancel an active response and
 `replace_response_text/3` when the complete text must replace the current
 buffer.
+
+## Typed errors
+
+Signaling and conversation failures arrive as `:error` events whose payload is
+`%VoxRtcServer.ErrorEvent{}`. It contains `message`, stable `code`,
+`recoverable`, and an optional `generation_id`. Known server error codes are
+available through `VoxRtcServer.ErrorEvent.known_codes/0` and
+`known_code?/1`.
+
+Only a non-recoverable error or closed control stream should end the call.
+Recoverable errors belong to the command or response generation named by the
+event and do not invalidate the RTC session.
 
 ## Lifecycle
 
