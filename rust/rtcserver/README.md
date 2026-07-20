@@ -64,3 +64,8 @@ per-command failure: abort the affected generation if `generation_id`
 matches, otherwise log and continue. Old Vox servers omit `code` and
 `recoverable`; the SDK defaults a missing `recoverable` to `true`, so treat
 those errors as recoverable unless the transport closed.
+
+`rtc.signaling_error` is a separate WebRTC signaling failure surfaced by
+`on_signaling_error`. It is terminal: Vox emits `message` and an optional
+numeric `generation`, then closes the session. There is no `recoverable`
+field — treat it as call-ending and recreate the session.

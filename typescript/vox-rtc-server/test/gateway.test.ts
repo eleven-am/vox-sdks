@@ -20,6 +20,7 @@ class FakeSession {
   sent: Array<{ type: string; data: unknown }> = [];
   closeCalls = 0;
   handlers = new Set<(event: WireEvent) => void>();
+  offerGeneration: number | null = null;
 
   onEvent(handler: (event: WireEvent) => void) {
     this.handlers.add(handler);
@@ -27,6 +28,11 @@ class FakeSession {
   }
 
   sendOffer(offer: unknown, options: unknown) {
+    const generation = (options as { generation?: unknown } | undefined)
+      ?.generation;
+    if (typeof generation === "number") {
+      this.offerGeneration = generation;
+    }
     this.sent.push({ type: "rtc.offer", data: { offer, options } });
   }
 
@@ -51,6 +57,15 @@ class FakeSession {
         channelName: `/rtc/${this.sessionId}`,
       });
     }
+  }
+
+  emitEcho(type: string, data: Record<string, unknown>) {
+    this.emit(
+      type,
+      this.offerGeneration === null
+        ? data
+        : { ...data, generation: this.offerGeneration },
+    );
   }
 }
 
@@ -142,7 +157,7 @@ test("gateway constructs and owns its Vox client without an authentication callb
   assert.equal(client.disconnectCalls, 1);
 });
 
-test("gateway provides full trickle signaling without leaking Vox credentials", async () => {
+test("gateway forwards the browser generation to Vox and echoes Vox's stamped generation verbatim", async () => {
   const session = new FakeSession();
   const server = createServer();
   const created: unknown[] = [];
@@ -168,8 +183,7 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
     const ready = await readyPromise;
     assert.equal(ready.type, "gateway.ready");
     const readyData = ready.data as Record<string, unknown>;
-    const capability = String(readyData.capability);
-    assert.ok(capability.length >= 32);
+    assert.equal(JSON.stringify(ready).includes("capability"), false);
     assert.equal(JSON.stringify(ready).includes("must-not-leak"), false);
     assert.equal(JSON.stringify(ready).includes("voxHttpBase"), false);
     assert.equal(
@@ -189,7 +203,6 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
       JSON.stringify({
         id: "offer-1",
         type: "rtc.offer",
-        capability,
         data: {
           offer: { type: "offer", sdp: "offer-sdp" },
           restart: false,
@@ -201,7 +214,6 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
       JSON.stringify({
         id: "candidate-1",
         type: "rtc.ice_candidate",
-        capability,
         data: {
           generation: 1,
           candidate: {
@@ -217,7 +229,6 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
       JSON.stringify({
         id: "candidate-complete",
         type: "rtc.ice_candidate",
-        capability,
         data: { candidate: null, generation: 1 },
       }),
     );
@@ -229,6 +240,11 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
       ["rtc.offer", "rtc.ice_candidate", "rtc.ice_candidate"],
     );
     assert.equal(
+      (session.sent[0]?.data as { options: { generation: number } }).options
+        .generation,
+      1,
+    );
+    assert.equal(
       session.sent[1]?.data &&
         (session.sent[1].data as { sdpMLineIndex: number }).sdpMLineIndex,
       0,
@@ -236,16 +252,17 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
     assert.equal(session.sent[2]?.data, null);
 
     const answerPromise = nextMessage(ws);
-    session.emit("rtc.answer", {
+    session.emitEcho("rtc.answer", {
       session_id: session.sessionId,
       answer: { type: "answer", sdp: "answer-sdp" },
     });
     const answer = await answerPromise;
     assert.equal(answer.id, "offer-1");
     assert.equal(answer.type, "rtc.answer");
+    assert.equal((answer.data as { generation: number }).generation, 1);
 
     const candidatePromise = nextMessage(ws);
-    session.emit("rtc.ice_candidate", { candidate: null });
+    session.emitEcho("rtc.ice_candidate", { candidate: null });
     const candidate = await candidatePromise;
     assert.equal(candidate.type, "rtc.ice_candidate");
     assert.deepEqual(candidate.data, { candidate: null, generation: 1 });
@@ -254,7 +271,6 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
       JSON.stringify({
         id: "offer-2",
         type: "rtc.offer",
-        capability,
         data: {
           offer: { type: "offer", sdp: "restart-sdp" },
           restart: true,
@@ -264,38 +280,54 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
     );
     while (session.sent.length < 4)
       await new Promise((resolve) => setImmediate(resolve));
-    const staleErrorPromise = nextMessage(ws);
+    assert.equal(
+      (session.sent[3]?.data as { options: { generation: number } }).options
+        .generation,
+      2,
+    );
+
     ws.send(
       JSON.stringify({
-        id: "candidate-stale",
+        id: "candidate-late",
         type: "rtc.ice_candidate",
-        capability,
         data: {
           generation: 1,
           candidate: {
-            candidate: "candidate:stale",
+            candidate: "candidate:late",
             sdpMid: "audio",
             sdpMLineIndex: 0,
           },
         },
       }),
     );
-    const staleError = await staleErrorPromise;
-    assert.equal(staleError.id, "candidate-stale");
-    assert.equal(staleError.type, "gateway.error");
-    assert.match(
-      String((staleError.data as Record<string, unknown>).message),
-      /Stale RTC candidate generation/,
+    while (session.sent.length < 5)
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(session.sent[4]?.type, "rtc.ice_candidate");
+    assert.equal(
+      (session.sent[4]?.data as { candidate: string }).candidate,
+      "candidate:late",
     );
-    assert.equal(session.sent.length, 4);
+
+    const preRestartPromise = nextMessage(ws);
+    session.emit("rtc.ice_candidate", {
+      candidate: {
+        candidate: "candidate:pre-restart",
+        sdpMid: "audio",
+        sdpMLineIndex: 0,
+      },
+      generation: 1,
+    });
+    const preRestart = await preRestartPromise;
+    assert.equal((preRestart.data as { generation: number }).generation, 1);
 
     const restartAnswerPromise = nextMessage(ws);
-    session.emit("rtc.answer", {
+    session.emitEcho("rtc.answer", {
       session_id: session.sessionId,
       answer: { type: "answer", sdp: "restart-answer-sdp" },
     });
     const restartAnswer = await restartAnswerPromise;
     assert.equal(restartAnswer.id, "offer-2");
+    assert.equal((restartAnswer.data as { generation: number }).generation, 2);
 
     ws.close();
     await once(ws, "close");
@@ -312,13 +344,10 @@ test("gateway provides full trickle signaling without leaking Vox credentials", 
   }
 });
 
-test("gateway rejects an invalid capability and cleans up exactly once", async () => {
+test("a conversation error during a pending offer forwards uncorrelated and leaves the offer pending", async () => {
   const session = new FakeSession();
   const server = createServer();
-  const closed: string[] = [];
-  const { gateway } = createTestGateway(session, {
-    onSessionClosed: (context) => closed.push(context.reason),
-  });
+  const { gateway } = createTestGateway(session);
   const detach = gateway.attach(server);
   const port = await listen(server);
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vox/rtc`);
@@ -327,21 +356,90 @@ test("gateway rejects an invalid capability and cleans up exactly once", async (
     const readyPromise = nextMessage(ws);
     await once(ws, "open");
     await readyPromise;
-    const errorPromise = nextMessage(ws);
+
     ws.send(
       JSON.stringify({
-        id: "bad-1",
+        id: "offer-1",
         type: "rtc.offer",
-        capability: "not-the-capability",
-        data: { offer: { type: "offer", sdp: "offer-sdp" } },
+        data: { offer: { type: "offer", sdp: "offer-sdp" }, generation: 1 },
       }),
     );
+    while (session.sent.length === 0)
+      await new Promise((resolve) => setImmediate(resolve));
+
+    const errorPromise = nextMessage(ws);
+    session.emit("error", {
+      message: "stale generation",
+      code: "response_stale_generation",
+    });
     const error = await errorPromise;
-    assert.equal(error.type, "gateway.error");
-    await once(ws, "close");
-    assert.equal(session.closeCalls, 1);
-    assert.deepEqual(closed, ["invalid_capability"]);
+    assert.equal(error.type, "error");
+    assert.equal(error.id, undefined);
+    assert.equal(
+      (error.data as { code: string }).code,
+      "response_stale_generation",
+    );
+
+    const answerPromise = nextMessage(ws);
+    session.emit("rtc.answer", {
+      session_id: session.sessionId,
+      answer: { type: "answer", sdp: "answer-sdp" },
+    });
+    const answer = await answerPromise;
+    assert.equal(answer.id, "offer-1");
+    assert.equal(answer.type, "rtc.answer");
   } finally {
+    if (ws.readyState === WebSocket.OPEN) ws.close();
+    detach();
+    await closeServer(server);
+  }
+});
+
+test("a signaling error during a pending offer rejects that offer by id", async () => {
+  const session = new FakeSession();
+  const server = createServer();
+  const { gateway } = createTestGateway(session);
+  const detach = gateway.attach(server);
+  const port = await listen(server);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vox/rtc`);
+
+  try {
+    const readyPromise = nextMessage(ws);
+    await once(ws, "open");
+    await readyPromise;
+
+    ws.send(
+      JSON.stringify({
+        id: "offer-1",
+        type: "rtc.offer",
+        data: { offer: { type: "offer", sdp: "offer-sdp" }, generation: 1 },
+      }),
+    );
+    while (session.sent.length === 0)
+      await new Promise((resolve) => setImmediate(resolve));
+
+    const signalingErrorPromise = nextMessage(ws);
+    session.emit("rtc.signaling_error", {
+      message: "failed to apply local description",
+      code: "session_failed",
+      recoverable: false,
+    });
+    const signalingError = await signalingErrorPromise;
+    assert.equal(signalingError.id, "offer-1");
+    assert.equal(signalingError.type, "rtc.signaling_error");
+
+    ws.send(
+      JSON.stringify({
+        id: "offer-2",
+        type: "rtc.offer",
+        data: { offer: { type: "offer", sdp: "offer-sdp-2" }, generation: 2 },
+      }),
+    );
+    while (session.sent.length < 2)
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(session.sent[1]?.type, "rtc.offer");
+  } finally {
+    if (ws.readyState === WebSocket.OPEN) ws.close();
     detach();
     await closeServer(server);
   }
@@ -358,15 +456,11 @@ test("an explicit browser close does not send a duplicate RTC close", async () =
   try {
     const readyPromise = nextMessage(ws);
     await once(ws, "open");
-    const ready = await readyPromise;
-    const capability = String(
-      (ready.data as Record<string, unknown>).capability,
-    );
+    await readyPromise;
     ws.send(
       JSON.stringify({
         id: "close-1",
         type: "rtc.close",
-        capability,
         data: { reason: "user_hangup" },
       }),
     );
@@ -579,17 +673,13 @@ test("a malformed offer preserves correlation and does not poison the next offer
   try {
     const readyPromise = nextMessage(ws);
     await once(ws, "open");
-    const ready = await readyPromise;
-    const capability = String(
-      (ready.data as Record<string, unknown>).capability,
-    );
+    await readyPromise;
 
     const errorPromise = nextMessage(ws);
     ws.send(
       JSON.stringify({
         id: "offer-bad",
         type: "rtc.offer",
-        capability,
         data: { offer: { type: "offer", sdp: "" }, generation: 1 },
       }),
     );
@@ -601,7 +691,6 @@ test("a malformed offer preserves correlation and does not poison the next offer
       JSON.stringify({
         id: "offer-good",
         type: "rtc.offer",
-        capability,
         data: { offer: { type: "offer", sdp: "valid-offer" }, generation: 1 },
       }),
     );
@@ -619,6 +708,88 @@ test("a malformed offer preserves correlation and does not poison the next offer
     assert.equal(answer.type, "rtc.answer");
   } finally {
     ws.close();
+    detach();
+    await closeServer(server);
+  }
+});
+
+test("an offer without a generation is forwarded to Vox without the key", async () => {
+  const session = new FakeSession();
+  const server = createServer();
+  const { gateway } = createTestGateway(session);
+  const detach = gateway.attach(server);
+  const port = await listen(server);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vox/rtc`);
+
+  try {
+    const readyPromise = nextMessage(ws);
+    await once(ws, "open");
+    await readyPromise;
+
+    ws.send(
+      JSON.stringify({
+        id: "offer-1",
+        type: "rtc.offer",
+        data: { offer: { type: "offer", sdp: "offer-sdp" } },
+      }),
+    );
+    while (session.sent.length === 0)
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(session.sent[0]?.type, "rtc.offer");
+    const options = (
+      session.sent[0]?.data as { options: Record<string, unknown> }
+    ).options;
+    assert.equal("generation" in options, false);
+    assert.equal(session.offerGeneration, null);
+
+    const answerPromise = nextMessage(ws);
+    session.emit("rtc.answer", {
+      session_id: session.sessionId,
+      answer: { type: "answer", sdp: "answer-sdp" },
+    });
+    const answer = await answerPromise;
+    assert.equal(answer.id, "offer-1");
+    assert.equal(answer.type, "rtc.answer");
+  } finally {
+    if (ws.readyState === WebSocket.OPEN) ws.close();
+    detach();
+    await closeServer(server);
+  }
+});
+
+test("an offer with a malformed generation is forwarded to Vox without the key", async () => {
+  const session = new FakeSession();
+  const server = createServer();
+  const { gateway } = createTestGateway(session);
+  const detach = gateway.attach(server);
+  const port = await listen(server);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vox/rtc`);
+
+  try {
+    const readyPromise = nextMessage(ws);
+    await once(ws, "open");
+    await readyPromise;
+
+    ws.send(
+      JSON.stringify({
+        id: "offer-1",
+        type: "rtc.offer",
+        data: {
+          offer: { type: "offer", sdp: "offer-sdp" },
+          generation: "abc",
+        },
+      }),
+    );
+    while (session.sent.length === 0)
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(session.sent[0]?.type, "rtc.offer");
+    const options = (
+      session.sent[0]?.data as { options: Record<string, unknown> }
+    ).options;
+    assert.equal("generation" in options, false);
+    assert.equal(session.offerGeneration, null);
+  } finally {
+    if (ws.readyState === WebSocket.OPEN) ws.close();
     detach();
     await closeServer(server);
   }

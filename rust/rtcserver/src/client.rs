@@ -38,7 +38,6 @@ pub struct VoxRtcServerClient {
     http_base: String,
     api_key: Option<String>,
     socket_base: String,
-    socket_params: EventData,
     http: reqwest::Client,
     socket: RawSocketClient,
     connection_timeout: Duration,
@@ -74,17 +73,13 @@ impl VoxRtcServerClient {
             .take()
             .map(|base| normalize_base(&base))
             .unwrap_or_else(|| default_socket_base(&http_base));
-        if let Some(api_key) = &api_key {
-            options
-                .socket_params
-                .insert("api_key".to_owned(), Value::String(api_key.clone()));
-        }
+        let socket_params = socket_params_with_api_key(options.socket_params, api_key.as_deref());
         let http = reqwest::Client::builder()
             .timeout(options.request_timeout)
             .build()?;
         let socket = RawSocketClient::new(
             &socket_base,
-            options.socket_params.clone(),
+            socket_params,
             options.connection_timeout,
             options.max_reconnect_delay,
         )?;
@@ -92,7 +87,6 @@ impl VoxRtcServerClient {
             http_base,
             api_key,
             socket_base,
-            socket_params: options.socket_params,
             http,
             socket,
             connection_timeout: options.connection_timeout,
@@ -194,14 +188,16 @@ impl VoxRtcServerClient {
         Ok(ControlledSession { bootstrap, session })
     }
 
-    #[allow(dead_code)]
-    pub fn socket_params(&self) -> &EventData {
-        &self.socket_params
-    }
-
     fn resolve_join_timeout(&self, options: SessionOptions) -> Duration {
         options.join_timeout.unwrap_or(self.join_timeout)
     }
+}
+
+fn socket_params_with_api_key(mut params: EventData, api_key: Option<&str>) -> EventData {
+    if let Some(api_key) = api_key {
+        params.insert("api_key".to_owned(), Value::String(api_key.to_owned()));
+    }
+    params
 }
 
 fn normalize_base(base: &str) -> String {
@@ -261,15 +257,13 @@ mod tests {
 
     #[test]
     fn injects_api_key_into_socket_params() {
-        let mut options = VoxRtcServerClientOptions::new("https://vox.example.com");
-        options.api_key = Some("secret".to_owned());
-        let client = VoxRtcServerClient::with_options(options).unwrap();
-        assert_eq!(
-            client
-                .socket_params()
-                .get("api_key")
-                .and_then(Value::as_str),
-            Some("secret")
-        );
+        let params = socket_params_with_api_key(EventData::new(), Some("secret"));
+        assert_eq!(params.get("api_key").and_then(Value::as_str), Some("secret"));
+    }
+
+    #[test]
+    fn omits_api_key_from_socket_params_when_absent() {
+        let params = socket_params_with_api_key(EventData::new(), None);
+        assert!(!params.contains_key("api_key"));
     }
 }

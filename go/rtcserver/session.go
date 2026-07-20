@@ -135,6 +135,8 @@ func (s *ControlSession) OnTranscript(handler func(TranscriptEvent)) func() {
 			EndMS:          numberValue(payload, "end_ms"),
 			EOUProbability: numberValue(payload, "eou_probability"),
 			Topics:         stringSliceValue(payload, "topics"),
+			Entities:       transcriptEntities(payload),
+			Words:          transcriptWords(payload),
 		})
 	})
 }
@@ -256,6 +258,7 @@ func (s *ControlSession) onInterruptionEvent(eventName string, handler func(Inte
 			},
 			VADActiveMS:       numberValue(payload, "vad_active_ms"),
 			PartialTranscript: stringValue(payload, "partial_transcript", ""),
+			Reason:            stringValue(payload, "reason", ""),
 		})
 	})
 }
@@ -300,6 +303,22 @@ func (s *ControlSession) OnError(handler func(ErrorEvent)) func() {
 	})
 }
 
+func (s *ControlSession) OnSignalingError(handler func(SignalingErrorEvent)) func() {
+	return s.On(EventRTCSignalingError, func(payload map[string]interface{}) {
+		event := SignalingErrorEvent{
+			SessionID:   eventSessionID(payload, s.sessionID),
+			ChannelName: s.channelName,
+			Data:        payload,
+			Message:     stringValue(payload, "message", ""),
+		}
+		if generation, ok := optionalNumber(payload, "generation"); ok {
+			value := int(generation)
+			event.Generation = &value
+		}
+		handler(event)
+	})
+}
+
 func (s *ControlSession) SendControl(event string, payload map[string]interface{}) {
 	if payload == nil {
 		payload = map[string]interface{}{}
@@ -307,14 +326,18 @@ func (s *ControlSession) SendControl(event string, payload map[string]interface{
 	s.channel.SendMessage(event, payload)
 }
 
-func (s *ControlSession) SendOffer(offer RTCSessionDescription, restart bool) error {
+func (s *ControlSession) SendOffer(offer RTCSessionDescription, restart bool, generation interface{}) error {
 	if offer.Type != "offer" || strings.TrimSpace(offer.SDP) == "" {
 		return fmt.Errorf("RTC offer requires a non-empty SDP offer")
 	}
-	s.SendControl("rtc.offer", map[string]interface{}{
+	payload := map[string]interface{}{
 		"offer":   offer,
 		"restart": restart,
-	})
+	}
+	if generation != nil {
+		payload["generation"] = generation
+	}
+	s.SendControl("rtc.offer", payload)
 	return nil
 }
 
@@ -554,26 +577,76 @@ func boolValue(payload map[string]interface{}, key string, fallback bool) bool {
 }
 
 func numberValue(payload map[string]interface{}, key string) float64 {
+	value, _ := optionalNumber(payload, key)
+	return value
+}
+
+func optionalNumber(payload map[string]interface{}, key string) (float64, bool) {
 	switch value := payload[key].(type) {
 	case float64:
-		return value
+		return value, true
 	case float32:
-		return float64(value)
+		return float64(value), true
 	case int:
-		return float64(value)
+		return float64(value), true
 	case int64:
-		return float64(value)
+		return float64(value), true
 	case int32:
-		return float64(value)
+		return float64(value), true
 	case uint:
-		return float64(value)
+		return float64(value), true
 	case uint64:
-		return float64(value)
+		return float64(value), true
 	case uint32:
-		return float64(value)
+		return float64(value), true
 	default:
-		return 0
+		return 0, false
 	}
+}
+
+func transcriptEntities(payload map[string]interface{}) []TranscriptEntity {
+	raw, ok := payload["entities"].([]interface{})
+	if !ok {
+		return nil
+	}
+	entities := make([]TranscriptEntity, 0, len(raw))
+	for _, item := range raw {
+		fields, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		entities = append(entities, TranscriptEntity{
+			Type:      stringValue(fields, "type", ""),
+			Text:      stringValue(fields, "text", ""),
+			StartChar: int(numberValue(fields, "start_char")),
+			EndChar:   int(numberValue(fields, "end_char")),
+		})
+	}
+	return entities
+}
+
+func transcriptWords(payload map[string]interface{}) []TranscriptWord {
+	raw, ok := payload["words"].([]interface{})
+	if !ok {
+		return nil
+	}
+	words := make([]TranscriptWord, 0, len(raw))
+	for _, item := range raw {
+		fields, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		word := TranscriptWord{
+			Word:    stringValue(fields, "word", ""),
+			StartMS: numberValue(fields, "start_ms"),
+			EndMS:   numberValue(fields, "end_ms"),
+		}
+		if confidence, ok := optionalNumber(fields, "confidence"); ok {
+			word.Confidence = &confidence
+		}
+		words = append(words, word)
+	}
+	return words
 }
 
 func stringSliceValue(payload map[string]interface{}, key string) []string {

@@ -15,6 +15,7 @@ from .types import (
     SocketClientFactory,
     SocketClientLike,
     Unsubscribe,
+    state_value,
 )
 
 
@@ -42,10 +43,6 @@ def _to_bootstrap(data: Mapping[str, Any]) -> SessionBootstrap:
         attach_ttl_seconds=int(data.get("attach_ttl_seconds", 0)),
         ice_servers=ice_servers,
     )
-
-
-def _state_value(state: Any) -> str:
-    return str(getattr(state, "value", state))
 
 
 def _default_socket_factory(
@@ -131,7 +128,7 @@ class VoxRtcServerClient:
     def connection_state(self) -> ConnectionState:
         if self._socket is None:
             return ConnectionState.DISCONNECTED
-        raw = _state_value(self._socket.get_state())
+        raw = state_value(self._socket.get_state())
         try:
             return ConnectionState(raw)
         except ValueError:
@@ -141,7 +138,7 @@ class VoxRtcServerClient:
         self, callback: Callable[[ConnectionState], None]
     ) -> Unsubscribe:
         def forward(state: Any) -> None:
-            raw = _state_value(state)
+            raw = state_value(state)
             try:
                 resolved = ConnectionState(raw)
             except ValueError:
@@ -155,7 +152,7 @@ class VoxRtcServerClient:
 
     async def connect(self) -> None:
         socket = self._ensure_socket()
-        if _state_value(socket.get_state()) == ConnectionState.CONNECTED.value:
+        if state_value(socket.get_state()) == ConnectionState.CONNECTED.value:
             return
         await socket.connect()
 

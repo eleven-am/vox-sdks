@@ -1,0 +1,11 @@
+{
+  "name": "vox-sdks-typescript",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6"
+  }
+}

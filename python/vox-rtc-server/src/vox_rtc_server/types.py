@@ -21,6 +21,10 @@ class ChannelState(StrEnum):
     DECLINED = "DECLINED"
 
 
+def state_value(state: Any) -> str:
+    return str(getattr(state, "value", state))
+
+
 @dataclass(slots=True)
 class RTCIceServer:
     urls: str | list[str]
@@ -34,20 +38,6 @@ class SessionBootstrap:
     expires_at: str
     attach_ttl_seconds: int
     ice_servers: list[RTCIceServer] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class RtcSessionDescription:
-    type: str
-    sdp: str
-
-
-@dataclass(slots=True)
-class RtcIceCandidate:
-    candidate: str
-    sdp_mid: str | None = None
-    sdp_m_line_index: int | None = None
-    username_fragment: str | None = None
 
 
 @dataclass(slots=True)
@@ -86,6 +76,7 @@ class SessionAttachedEvent:
     session_id: str
     channel_name: str
     data: dict[str, Any]
+    provider: str | None = None
 
 
 @dataclass(slots=True)
@@ -94,6 +85,22 @@ class SessionCreatedEvent:
     channel_name: str
     data: dict[str, Any]
     session: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class TranscriptEntity:
+    type: str
+    text: str
+    start_char: int
+    end_char: int
+
+
+@dataclass(slots=True)
+class TranscriptWord:
+    word: str
+    start_ms: int | float
+    end_ms: int | float
+    confidence: float | None = None
 
 
 @dataclass(slots=True)
@@ -107,6 +114,8 @@ class TranscriptEvent:
     end_ms: int | float | None = None
     eou_probability: int | float | None = None
     topics: list[str] | None = None
+    entities: list[TranscriptEntity] | None = None
+    words: list[TranscriptWord] | None = None
 
 
 @dataclass(slots=True)
@@ -164,6 +173,7 @@ class ResponseEvent:
 class InterruptionEvent(ResponseEvent):
     vad_active_ms: int | float | None = None
     partial_transcript: str | None = None
+    reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -195,6 +205,15 @@ class ErrorEvent:
     code: str | None = None
     recoverable: bool = True
     generation_id: str | None = None
+
+
+@dataclass(slots=True)
+class SignalingErrorEvent:
+    session_id: str
+    channel_name: str
+    data: dict[str, Any]
+    message: str | None = None
+    generation: int | None = None
 
 
 ERROR_CODE_RESPONSE_REJECTED_TURN_STATE = "response_rejected_turn_state"

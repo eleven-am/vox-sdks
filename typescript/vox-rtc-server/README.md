@@ -68,8 +68,8 @@ await gateway.close();
 ```
 
 The browser sees only public ICE/session metadata. The gateway retains the Vox
-hostname, API key, internal socket endpoint, and its opaque capability. Audio
-remains direct browser-to-Vox WebRTC media.
+hostname, API key, and internal socket endpoint. Audio remains direct
+browser-to-Vox WebRTC media.
 
 ## PondSocket control session
 
@@ -152,5 +152,24 @@ session.onError((event) => {
   if (event.generationId) {
     abortGeneration(event.generationId);
   }
+});
+```
+
+`onSignalingError` is a separate, terminal event. Vox emits `rtc.signaling_error`
+(`{ message, generation }`) only when a WebRTC signaling failure ends the session,
+and closes the session immediately after. The event carries no `code` and no
+`recoverable` field — treat every `onSignalingError` as call-ending.
+
+## Reconnection
+
+The underlying PondSocket client reconnects the socket with exponential backoff
+and re-joins the control channel automatically after a transient drop: a joined
+channel moves to a stalled state while the socket is down and re-sends its join
+request once the socket reconnects. The SDK relies on that behavior rather than
+tearing the session down. Observe the transitions with `onConnectionChange`:
+
+```ts
+const off = vox.onConnectionChange((state) => {
+  console.log("Vox control connection", state);
 });
 ```

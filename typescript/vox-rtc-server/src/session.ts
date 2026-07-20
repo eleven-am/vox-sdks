@@ -17,11 +17,14 @@ import type {
   VoxRtcSessionConfig,
   VoxRtcSessionCreatedEvent,
   VoxRtcSessionDescription,
+  VoxRtcSignalingErrorEvent,
   VoxRtcSpeechEvent,
   VoxRtcStartResponseResult,
   VoxRtcStartResponseWaitOptions,
   VoxRtcTranscriptDeltaEvent,
+  VoxRtcTranscriptEntity,
   VoxRtcTranscriptEvent,
+  VoxRtcTranscriptWord,
   VoxRtcTurnEouPredictedEvent,
   VoxRtcTurnStateEvent,
   VoxRtcWireEvent,
@@ -42,6 +45,7 @@ const EVT_RTC_SESSION_ATTACHED = "rtc.session.attached";
 const EVT_RTC_ANSWER = "rtc.answer";
 const EVT_RTC_ICE_CANDIDATE = "rtc.ice_candidate";
 const EVT_RTC_SESSION_CLOSED = "rtc.session.closed";
+const EVT_RTC_SIGNALING_ERROR = "rtc.signaling_error";
 const EVT_SESSION_CREATED = "session.created";
 const EVT_SPEECH_STARTED = "input_audio_buffer.speech_started";
 const EVT_SPEECH_STOPPED = "input_audio_buffer.speech_stopped";
@@ -87,6 +91,40 @@ function optionalStringArray(value: unknown): string[] | undefined {
   return strings.length === value.length ? strings : undefined;
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function optionalEntities(value: unknown): VoxRtcTranscriptEntity[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entities: VoxRtcTranscriptEntity[] = [];
+  for (const item of value) {
+    if (!isObjectRecord(item)) continue;
+    entities.push({
+      type: requiredString(item.type, ""),
+      text: requiredString(item.text, ""),
+      startChar: optionalNumber(item.start_char),
+      endChar: optionalNumber(item.end_char),
+    });
+  }
+  return entities;
+}
+
+function optionalWords(value: unknown): VoxRtcTranscriptWord[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const words: VoxRtcTranscriptWord[] = [];
+  for (const item of value) {
+    if (!isObjectRecord(item)) continue;
+    words.push({
+      word: requiredString(item.word, ""),
+      startMs: optionalNumber(item.start_ms),
+      endMs: optionalNumber(item.end_ms),
+      confidence: optionalNumber(item.confidence),
+    });
+  }
+  return words;
+}
+
 function baseEvent(
   payload: Record<string, unknown>,
   sessionId: string,
@@ -122,6 +160,7 @@ function interruptionEvent(
     partialTranscript: payload.partial_transcript === null
       ? null
       : optionalString(payload.partial_transcript),
+    reason: optionalString(payload.reason),
   };
 }
 
@@ -191,6 +230,32 @@ function withAllowInterruptions(
   return { ...payload, allow_interruptions: options.allowInterruptions };
 }
 
+const SESSION_CONFIG_KEY_MAP: Record<string, string> = {
+  sttModel: "stt_model",
+  ttsModel: "tts_model",
+  voice: "voice",
+  turnProfile: "turn_profile",
+  vadBackend: "vad_backend",
+  turnDetector: "turn_detector",
+};
+
+export class VoxRtcChannelJoinError extends Error {
+  readonly code?: string;
+  readonly status?: number;
+  readonly details?: unknown;
+
+  constructor(
+    message: string,
+    fields: { code?: string; status?: number; details?: unknown },
+  ) {
+    super(message);
+    this.name = "VoxRtcChannelJoinError";
+    this.code = fields.code;
+    this.status = fields.status;
+    this.details = fields.details;
+  }
+}
+
 export class VoxRtcControlSession {
   readonly #channel: SocketChannelLike;
   readonly #sessionId: string;
@@ -231,10 +296,16 @@ export class VoxRtcControlSession {
         if (state === ChannelState.JOINED) {
           finish(resolve);
         } else if (state === ChannelState.DECLINED || state === ChannelState.CLOSED) {
-          const reason = this.#channel.joinError?.message;
+          const joinError = this.#channel.joinError ?? null;
+          const reason = joinError?.message;
           const suffix = reason ? `: ${reason}` : "";
-          finish(() => reject(new Error(
+          finish(() => reject(new VoxRtcChannelJoinError(
             `RTC channel join failed for ${this.#channelName}: ${state}${suffix}`,
+            {
+              code: joinError?.code,
+              status: joinError?.status,
+              details: joinError?.details,
+            },
           )));
         }
       });
@@ -334,6 +405,16 @@ export class VoxRtcControlSession {
     });
   }
 
+  onSignalingError(handler: (event: VoxRtcSignalingErrorEvent) => void): Unsubscribe {
+    return this.on(EVT_RTC_SIGNALING_ERROR, (payload) => {
+      handler({
+        ...baseEvent(payload, this.#sessionId, this.#channelName),
+        message: optionalString(payload.message),
+        generation: optionalNumber(payload.generation),
+      });
+    });
+  }
+
   onTranscript(handler: (event: VoxRtcTranscriptEvent) => void): Unsubscribe {
     return this.on(EVT_TRANSCRIPT_COMPLETED, (payload) => {
       handler({
@@ -344,6 +425,8 @@ export class VoxRtcControlSession {
         endMs: optionalNumber(payload.end_ms),
         eouProbability: optionalNumber(payload.eou_probability),
         topics: optionalStringArray(payload.topics),
+        entities: optionalEntities(payload.entities),
+        words: optionalWords(payload.words),
       });
     });
   }
@@ -463,6 +546,9 @@ export class VoxRtcControlSession {
     this.sendControl("rtc.offer", {
       offer: { type: offer.type, sdp: offer.sdp },
       restart: options?.restart === true,
+      ...(options?.generation !== undefined
+        ? { generation: options.generation }
+        : {}),
     });
   }
 
@@ -485,26 +571,10 @@ export class VoxRtcControlSession {
 
   configure(config: VoxRtcSessionConfig): void {
     const session: Record<string, unknown> = {};
-    if (config.sttModel !== undefined) session.stt_model = config.sttModel;
-    if (config.ttsModel !== undefined) session.tts_model = config.ttsModel;
-    if (config.voice !== undefined) session.voice = config.voice;
-    if (config.turnProfile !== undefined) session.turn_profile = config.turnProfile;
-    if (config.vadBackend !== undefined) session.vad_backend = config.vadBackend;
-    if (config.turnDetector !== undefined) session.turn_detector = config.turnDetector;
-
     for (const [key, value] of Object.entries(config)) {
-      if (
-        key !== "sttModel"
-        && key !== "ttsModel"
-        && key !== "voice"
-        && key !== "turnProfile"
-        && key !== "vadBackend"
-        && key !== "turnDetector"
-      ) {
-        session[key] = value;
-      }
+      if (value === undefined) continue;
+      session[SESSION_CONFIG_KEY_MAP[key] ?? key] = value;
     }
-
     this.sendControl("session.update", { session });
   }
 
@@ -605,14 +675,8 @@ export class VoxRtcControlSession {
     );
   }
 
-  sendTextResponse(text: string, options?: VoxRtcResponseOptions & { cancelFirst?: boolean }): void {
-    if (options?.cancelFirst !== false) {
-      this.replaceResponseText(text, options);
-      return;
-    }
-    this.startResponse(options);
-    this.appendResponseText(text, options);
-    this.commitResponse();
+  sendTextResponse(text: string, options?: VoxRtcResponseOptions): void {
+    this.replaceResponseText(text, options);
   }
 
   sendClientEvent(envelope: VoxRtcClientEventEnvelope): void {

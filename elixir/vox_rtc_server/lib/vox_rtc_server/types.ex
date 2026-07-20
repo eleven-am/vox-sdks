@@ -55,7 +55,6 @@ defmodule VoxRtcServer.TurnPolicy do
     :allow_interrupt_while_speaking,
     :min_interrupt_duration_ms,
     :max_endpointing_delay_ms,
-    :stable_speaking_min_ms,
     :false_interruption_timeout_ms,
     :min_interrupt_words,
     :partial_interrupts,

@@ -30,11 +30,13 @@ example.
 
 ## Security boundary
 
-Browser code receives public ICE configuration and an SDK-internal opaque
-gateway capability. It never receives the Vox API key, Vox hostname, internal
-PondSocket endpoint, or any Vox-issued transport credential. Gateway lifecycle
-hooks receive the original incoming request and complete server-side session;
-applications may inspect that request or ignore it.
+Browser code receives public ICE configuration only. It never receives the
+Vox API key, Vox hostname, internal PondSocket endpoint, or any Vox-issued
+transport credential. Each WebSocket connection to the gateway owns exactly
+one server-created session; frames on a connection can only ever address that
+connection's session. Gateway lifecycle hooks receive the original incoming
+request and complete server-side session; applications may inspect that
+request (for example to enforce an Origin allowlist) or ignore it.
 
 ## Versioning
 

@@ -100,11 +100,17 @@ client.onSessionError((error) => {
 });
 ```
 
-Each session error carries `message`, `code`, `recoverable`, and
+Each conversation `error` frame carries `message`, `code`, `recoverable`, and
 `generationId`. `code` values are the stable contract set exported as
 `VOX_ERROR_CODES` (check membership with `isVoxErrorCode`). Old Vox servers
 omit `code` and `recoverable`; the SDK normalizes an empty `code` to
 `undefined` and treats missing `recoverable` as `true`.
+
+A WebRTC signaling failure (`rtc.signaling_error`, which Vox sends as
+`{ message, generation }`) is different: it is terminal — Vox closes the session
+immediately after emitting it. It surfaces through the same `onSessionError`
+channel with `recoverable: false` and no `code` or `generationId`, so
+`isFatalVoxError` is always `true` for it.
 
 Only a fatal error (`recoverable === false`, which includes
 `code === "session_failed"`) or an actual transport/connection failure (the
@@ -139,27 +145,19 @@ const client = new VoxRtcBrowserClient({
   signalingEndpoint: "/api/vox/rtc",
   audioElement,
   audioDucking: {
-    mode: "vox",
     duckVolume: 0.2,
-    sustainedVolume: 0.05,
-    sustainedAfterMs: 700,
     releaseDelayMs: 350,
   },
 });
 ```
 
-Modes:
-
-- `vox`: follow authoritative Vox speech and interruption events
-- `local`: react immediately to microphone level, with possible speaker leakage
-- `hybrid`: react locally, then retain ducking only when Vox confirms speech
-
-The gateway already forwards the required Vox events. Applications do not need
-another SSE or WebSocket connection.
+Ducking follows the authoritative Vox speech and interruption events that the
+gateway already forwards, so applications do not need another SSE or WebSocket
+connection. Vox owns the interruption decision; ducking only adjusts local
+playback volume while that decision is pending.
 
 ## Private data
 
-The opaque gateway capability is held inside the SDK. Session objects exposed
-to application code contain only the session ID, ICE servers, and expiry
-metadata. The client rejects gateway responses containing Vox tokens, internal
-URLs, or other private connection fields.
+Session objects exposed to application code contain only the session ID, ICE
+servers, and expiry metadata. The Vox API key, internal hostname, and socket
+endpoint stay on the gateway and never reach the browser.

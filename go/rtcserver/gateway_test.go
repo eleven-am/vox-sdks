@@ -75,9 +75,8 @@ func TestGatewayForwardsTrickleSignalingAndRunsLifecycleHooks(t *testing.T) {
 		t.Fatalf("unexpected ready event: %#v", ready)
 	}
 	data := ready["data"].(map[string]interface{})
-	capability, ok := data["capability"].(string)
-	if !ok || capability == "" {
-		t.Fatalf("gateway omitted capability: %#v", data)
+	if _, ok := data["capability"]; ok {
+		t.Fatalf("gateway.ready still carries a capability: %#v", data)
 	}
 	encoded, _ := json.Marshal(ready)
 	if strings.Contains(string(encoded), "voxHttpBase") || strings.Contains(string(encoded), "apiKey") {
@@ -85,28 +84,33 @@ func TestGatewayForwardsTrickleSignalingAndRunsLifecycleHooks(t *testing.T) {
 	}
 
 	writeGatewayMessage(t, connection, map[string]interface{}{
-		"id": "offer-1", "type": "rtc.offer", "capability": capability,
+		"id": "offer-1", "type": "rtc.offer",
 		"data": map[string]interface{}{
 			"generation": float64(1),
 			"offer":      map[string]interface{}{"type": "offer", "sdp": "v=0\r\n"},
 		},
 	})
 	waitForSentEvent(t, channel, "rtc.offer")
+	forwardedGeneration := sentEventPayload(t, channel, "rtc.offer")["generation"]
+	if forwardedGeneration != float64(1) {
+		t.Fatalf("offer command did not forward the browser generation to vox: %#v", forwardedGeneration)
+	}
 	channel.emit("rtc.answer", map[string]interface{}{
-		"answer": map[string]interface{}{"type": "answer", "sdp": "v=0\r\n"},
+		"answer":     map[string]interface{}{"type": "answer", "sdp": "v=0\r\n"},
+		"generation": forwardedGeneration,
 	})
 	answer := readGatewayMessage(t, connection)
 	if answer["id"] != "offer-1" || answer["type"] != "rtc.answer" {
 		t.Fatalf("offer response was not correlated: %#v", answer)
 	}
 
-	channel.emit("rtc.ice_candidate", map[string]interface{}{"candidate": nil})
+	channel.emit("rtc.ice_candidate", map[string]interface{}{"candidate": nil, "generation": forwardedGeneration})
 	candidate := readGatewayMessage(t, connection)
 	if candidate["type"] != "rtc.ice_candidate" {
 		t.Fatalf("unexpected candidate event: %#v", candidate)
 	}
 	if candidate["data"].(map[string]interface{})["generation"] != float64(1) {
-		t.Fatalf("candidate omitted negotiation generation: %#v", candidate)
+		t.Fatalf("candidate did not forward vox's negotiation generation verbatim: %#v", candidate)
 	}
 
 	if err := connection.Close(); err != nil {
@@ -149,6 +153,170 @@ func TestGatewayRejectsFailedSessionHookWithoutSendingReady(t *testing.T) {
 	}
 }
 
+func TestGatewayLeavesOfferPendingOnUnrelatedConversationError(t *testing.T) {
+	channel, connection, cleanup := dialGateway(t, GatewayOptions{Path: "/api/rtc"})
+	defer cleanup()
+
+	ready := readGatewayMessage(t, connection)
+	if ready["type"] != "gateway.ready" {
+		t.Fatalf("unexpected ready event: %#v", ready)
+	}
+
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "offer-1", "type": "rtc.offer",
+		"data": map[string]interface{}{
+			"generation": float64(1),
+			"offer":      map[string]interface{}{"type": "offer", "sdp": "v=0\r\n"},
+		},
+	})
+	waitForSentEvent(t, channel, "rtc.offer")
+
+	channel.emit("error", map[string]interface{}{
+		"message": "response stale generation",
+		"code":    ErrorCodeResponseStaleGeneration,
+	})
+	errored := readGatewayMessage(t, connection)
+	if errored["type"] != "error" {
+		t.Fatalf("expected conversation error forwarded, got %#v", errored)
+	}
+	if _, correlated := errored["id"]; correlated {
+		t.Fatalf("conversation error must forward uncorrelated to the pending offer: %#v", errored)
+	}
+
+	channel.emit("rtc.answer", map[string]interface{}{
+		"answer": map[string]interface{}{"type": "answer", "sdp": "v=0\r\n"},
+	})
+	answer := readGatewayMessage(t, connection)
+	if answer["id"] != "offer-1" || answer["type"] != "rtc.answer" {
+		t.Fatalf("unrelated error cleared the pending offer: %#v", answer)
+	}
+}
+
+func TestGatewayRejectsPendingOfferOnSignalingError(t *testing.T) {
+	channel, connection, cleanup := dialGateway(t, GatewayOptions{Path: "/api/rtc"})
+	defer cleanup()
+
+	ready := readGatewayMessage(t, connection)
+	if ready["type"] != "gateway.ready" {
+		t.Fatalf("unexpected ready event: %#v", ready)
+	}
+
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "offer-1", "type": "rtc.offer",
+		"data": map[string]interface{}{
+			"generation": float64(1),
+			"offer":      map[string]interface{}{"type": "offer", "sdp": "v=0\r\n"},
+		},
+	})
+	waitForSentEvent(t, channel, "rtc.offer")
+
+	channel.emit("rtc.signaling_error", map[string]interface{}{
+		"message":    "setLocalDescription failed",
+		"code":       "signaling_failed",
+		"generation": float64(1),
+	})
+	signaling := readGatewayMessage(t, connection)
+	if signaling["type"] != "rtc.signaling_error" || signaling["id"] != "offer-1" {
+		t.Fatalf("signaling error did not reject the pending offer: %#v", signaling)
+	}
+}
+
+func TestGatewaySubscribesBeforeSessionCreatedHook(t *testing.T) {
+	channel := &fakeChannel{}
+	client := &fakeGatewayClient{channel: channel}
+	gateway := newGatewayWithClient(GatewayOptions{
+		Path: "/api/rtc",
+		OnSessionCreated: func(GatewaySessionContext) error {
+			channel.emit("turn.state_changed", map[string]interface{}{"state": "listening"})
+			return nil
+		},
+	}, client)
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+	defer gateway.Close("test_shutdown")
+
+	connection, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"/api/rtc",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial gateway: %v", err)
+	}
+	defer connection.Close()
+
+	event := readGatewayMessage(t, connection)
+	if event["type"] != "turn.state_changed" {
+		t.Fatalf("event emitted while the hook ran did not reach the browser: %#v", event)
+	}
+	ready := readGatewayMessage(t, connection)
+	if ready["type"] != "gateway.ready" {
+		t.Fatalf("expected gateway.ready after the hook event: %#v", ready)
+	}
+}
+
+func TestGatewaySkipsRegistrationWhenHookClosesSession(t *testing.T) {
+	channel := &fakeChannel{}
+	client := &fakeGatewayClient{channel: channel}
+	gateway := newGatewayWithClient(GatewayOptions{
+		Path: "/api/rtc",
+		OnSessionCreated: func(GatewaySessionContext) error {
+			channel.emit("rtc.session.closed", map[string]interface{}{"reason": "peer_gone"})
+			return nil
+		},
+	}, client)
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+	defer gateway.Close("test_shutdown")
+
+	connection, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"/api/rtc",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial gateway: %v", err)
+	}
+	defer connection.Close()
+
+	closedEvent := readGatewayMessage(t, connection)
+	if closedEvent["type"] != "rtc.session.closed" {
+		t.Fatalf("terminal event was not forwarded to the browser: %#v", closedEvent)
+	}
+	waitFor(t, func() bool {
+		return gatewayActiveCount(gateway) == 0
+	}, "hook-closed session removed from the active registry")
+}
+
+func gatewayActiveCount(gateway *Gateway) int {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	return len(gateway.active)
+}
+
+func dialGateway(t *testing.T, options GatewayOptions) (*fakeChannel, *websocket.Conn, func()) {
+	t.Helper()
+	if strings.TrimSpace(options.Path) == "" {
+		options.Path = "/api/rtc"
+	}
+	channel := &fakeChannel{}
+	client := &fakeGatewayClient{channel: channel}
+	gateway := newGatewayWithClient(options, client)
+	server := httptest.NewServer(gateway)
+	connection, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+options.Path,
+		nil,
+	)
+	if err != nil {
+		server.Close()
+		t.Fatalf("dial gateway: %v", err)
+	}
+	cleanup := func() {
+		_ = connection.Close()
+		_ = gateway.Close("test_shutdown")
+		server.Close()
+	}
+	return channel, connection, cleanup
+}
+
 func readGatewayMessage(t *testing.T, connection *websocket.Conn) map[string]interface{} {
 	t.Helper()
 	if err := connection.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
@@ -178,6 +346,17 @@ func waitForSentEvent(t *testing.T, channel *fakeChannel, event string) {
 		}
 		return false
 	}, event)
+}
+
+func sentEventPayload(t *testing.T, channel *fakeChannel, event string) map[string]interface{} {
+	t.Helper()
+	for _, sent := range channel.sentMessages() {
+		if sent.event == event {
+			return sent.payload
+		}
+	}
+	t.Fatalf("no %s command was forwarded to vox", event)
+	return nil
 }
 
 func waitFor(t *testing.T, condition func() bool, description string) {

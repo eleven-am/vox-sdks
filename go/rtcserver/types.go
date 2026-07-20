@@ -15,6 +15,7 @@ const (
 	EventResponseCreated           = "response.created"
 	EventResponseDone              = "response.done"
 	EventRTCSessionAttached        = "rtc.session.attached"
+	EventRTCSignalingError         = "rtc.signaling_error"
 	EventRTCAnswer                 = "rtc.answer"
 	EventRTCIceCandidate           = "rtc.ice_candidate"
 	EventRTCSessionClosed          = "rtc.session.closed"
@@ -113,6 +114,20 @@ type SessionCreatedEvent struct {
 	Session     map[string]interface{}
 }
 
+type TranscriptEntity struct {
+	Type      string
+	Text      string
+	StartChar int
+	EndChar   int
+}
+
+type TranscriptWord struct {
+	Word       string
+	StartMS    float64
+	EndMS      float64
+	Confidence *float64
+}
+
 type TranscriptEvent struct {
 	SessionID      string
 	ChannelName    string
@@ -123,6 +138,8 @@ type TranscriptEvent struct {
 	EndMS          float64
 	EOUProbability float64
 	Topics         []string
+	Entities       []TranscriptEntity
+	Words          []TranscriptWord
 }
 
 type TurnStateEvent struct {
@@ -182,6 +199,7 @@ type InterruptionEvent struct {
 	ResponseEvent
 	VADActiveMS       float64
 	PartialTranscript string
+	Reason            string
 }
 
 type BrowserEvent struct {
@@ -210,4 +228,12 @@ type ErrorEvent struct {
 	Code         string
 	Recoverable  bool
 	GenerationID string
+}
+
+type SignalingErrorEvent struct {
+	SessionID   string
+	ChannelName string
+	Data        map[string]interface{}
+	Message     string
+	Generation  *int
 }

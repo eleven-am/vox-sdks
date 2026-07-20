@@ -76,3 +76,10 @@ call. Recoverable errors are per-command failures: handle them and keep the
 session running. Old Vox servers omit `code` and `recoverable`; the SDK then
 defaults `recoverable` to `True`, so treat such errors as recoverable unless
 the transport closed.
+
+`on_signaling_error` surfaces the `rtc.signaling_error` control event (WebRTC
+signaling failures such as a rejected local description) as a `SignalingErrorEvent`
+carrying `message` and a numeric `generation`. This event is terminal: Vox closes
+the session immediately after emitting it, so there is no `recoverable` field —
+treat it as the end of the call, not a per-command error like the conversation
+`error` stream.

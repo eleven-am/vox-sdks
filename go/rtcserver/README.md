@@ -113,3 +113,23 @@ session.OnError(func(event rtcserver.ErrorEvent) {
 	}
 })
 ```
+
+`OnSignalingError` delivers the control channel's `rtc.signaling_error`
+(`Message`, optional `Generation`). It reports a failure in the WebRTC
+signaling handshake itself. The event is terminal: the server closes the
+session immediately after emitting it, so end the call.
+
+```go
+session.OnSignalingError(func(event rtcserver.SignalingErrorEvent) {
+	log.Printf("RTC signaling failed: %s", event.Message)
+	session.Close()
+})
+```
+
+## Transcript details
+
+`OnTranscript` exposes the recognised `Entities`
+(`Type`, `Text`, `StartChar`, `EndChar`) and word timings `Words`
+(`Word`, `StartMS`, `EndMS`, optional `Confidence`) alongside the transcript
+text. Both interruption callbacks (`OnInterruptionDetected`,
+`OnInterruptionFalsePositive`) carry the server's `Reason` slug.

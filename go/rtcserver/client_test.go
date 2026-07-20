@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	pondsocket "github.com/eleven-am/pondsocket/go/pondsocket-client"
+	"github.com/gorilla/websocket"
 )
 
 type fakeChannel struct {
@@ -17,8 +19,6 @@ type fakeChannel struct {
 	sent          []sentMessage
 	stateHandlers []func(channelState)
 	msgHandlers   []func(string, map[string]interface{})
-	joinError     string
-	joinState     channelState
 }
 
 type sentMessage struct {
@@ -27,17 +27,9 @@ type sentMessage struct {
 }
 
 func (f *fakeChannel) Join() {
-	state := f.joinState
-	if state == "" {
-		state = channelStateJoined
-	}
 	for _, handler := range f.stateHandlers {
-		handler(state)
+		handler(channelStateJoined)
 	}
-}
-
-func (f *fakeChannel) JoinError() string {
-	return f.joinError
 }
 
 func (f *fakeChannel) Leave() {}
@@ -242,17 +234,51 @@ func TestAttachSessionForwardsMaxReconnectDelay(t *testing.T) {
 }
 
 func TestAttachSessionReportsJoinDeclineReason(t *testing.T) {
-	fake := &fakeSocket{channel: &fakeChannel{
-		joinState: channelStateDeclined,
-		joinError: "unknown or expired RTC session",
-	}}
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade pond connection: %v", err)
+			return
+		}
+		defer connection.Close()
+		var join struct {
+			Action      string `json:"action"`
+			ChannelName string `json:"channelName"`
+		}
+		if err := connection.ReadJSON(&join); err != nil {
+			t.Errorf("read join message: %v", err)
+			return
+		}
+		if join.Action != string(pondsocket.JoinChannel) {
+			t.Errorf("expected JOIN_CHANNEL, got %q", join.Action)
+			return
+		}
+		decline := map[string]interface{}{
+			"action":      string(pondsocket.System),
+			"event":       string(pondsocket.EventNotFound),
+			"channelName": join.ChannelName,
+			"payload":     map[string]interface{}{"code": 404, "message": "unknown or expired RTC session"},
+		}
+		if err := connection.WriteJSON(decline); err != nil {
+			t.Errorf("write decline frame: %v", err)
+			return
+		}
+		for {
+			if _, _, err := connection.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
 	client := NewClient(ClientOptions{
 		HTTPBase:          "https://vox.example.com",
-		ConnectionTimeout: 500 * time.Millisecond,
+		SocketBase:        "ws" + strings.TrimPrefix(server.URL, "http"),
+		ConnectionTimeout: 2 * time.Second,
+		JoinTimeout:       2 * time.Second,
 	})
-	client.socketFactory = func(endpoint string, params map[string]interface{}, _ time.Duration) (socketClient, error) {
-		return fake, nil
-	}
+	defer client.Disconnect()
 
 	_, err := client.AttachSession(context.Background(), "rtc_123")
 	if err == nil {
@@ -690,6 +716,121 @@ func TestResponseLifecycleEventsExposeGenerationID(t *testing.T) {
 	}
 }
 
+func TestOnTranscriptIncludesEntitiesAndWords(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event TranscriptEvent
+	session.OnTranscript(func(e TranscriptEvent) {
+		event = e
+	})
+	fake.channel.emit(EventTranscriptCompleted, map[string]interface{}{
+		"transcript": "call Ada tomorrow",
+		"language":   "en",
+		"session_id": "rtc_123",
+		"entities": []interface{}{
+			map[string]interface{}{"type": "PERSON", "text": "Ada", "start_char": 5.0, "end_char": 8.0},
+		},
+		"words": []interface{}{
+			map[string]interface{}{"word": "call", "start_ms": 0.0, "end_ms": 100.0, "confidence": 0.92},
+			map[string]interface{}{"word": "Ada", "start_ms": 100.0, "end_ms": 200.0},
+		},
+	})
+
+	if len(event.Entities) != 1 {
+		t.Fatalf("unexpected entities: %#v", event.Entities)
+	}
+	entity := event.Entities[0]
+	if entity.Type != "PERSON" || entity.Text != "Ada" || entity.StartChar != 5 || entity.EndChar != 8 {
+		t.Fatalf("unexpected entity: %#v", entity)
+	}
+	if len(event.Words) != 2 {
+		t.Fatalf("unexpected words: %#v", event.Words)
+	}
+	if event.Words[0].Word != "call" || event.Words[0].StartMS != 0 || event.Words[0].EndMS != 100 {
+		t.Fatalf("unexpected first word: %#v", event.Words[0])
+	}
+	if event.Words[0].Confidence == nil || *event.Words[0].Confidence != 0.92 {
+		t.Fatalf("expected first word confidence 0.92: %#v", event.Words[0].Confidence)
+	}
+	if event.Words[1].Confidence != nil {
+		t.Fatalf("expected omitted confidence to stay nil: %#v", event.Words[1].Confidence)
+	}
+}
+
+func TestOnInterruptionIncludesReason(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var detected InterruptionEvent
+	var falsePositive InterruptionEvent
+	session.OnInterruptionDetected(func(e InterruptionEvent) {
+		detected = e
+	})
+	session.OnInterruptionFalsePositive(func(e InterruptionEvent) {
+		falsePositive = e
+	})
+
+	fake.channel.emit(EventInterruptionDetected, map[string]interface{}{
+		"response_id": "resp_1",
+		"reason":      "user_speech_confirmed",
+		"session_id":  "rtc_123",
+	})
+	fake.channel.emit(EventInterruptionFalsePositive, map[string]interface{}{
+		"response_id": "resp_1",
+		"reason":      "self_echo",
+		"session_id":  "rtc_123",
+	})
+
+	if detected.Reason != "user_speech_confirmed" {
+		t.Fatalf("unexpected detected reason: %q", detected.Reason)
+	}
+	if falsePositive.Reason != "self_echo" {
+		t.Fatalf("unexpected false-positive reason: %q", falsePositive.Reason)
+	}
+}
+
+func TestOnSignalingError(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event SignalingErrorEvent
+	session.OnSignalingError(func(e SignalingErrorEvent) {
+		event = e
+	})
+	fake.channel.emit(EventRTCSignalingError, map[string]interface{}{
+		"message":    "failed to apply local description",
+		"generation": float64(3),
+		"session_id": "rtc_123",
+	})
+
+	if event.Message != "failed to apply local description" {
+		t.Fatalf("unexpected message: %q", event.Message)
+	}
+	if event.Generation == nil || *event.Generation != 3 {
+		t.Fatalf("expected echoed negotiation generation 3: %#v", event.Generation)
+	}
+	if event.SessionID != "rtc_123" || event.ChannelName != "/rtc/rtc_123" {
+		t.Fatalf("unexpected metadata: %#v", event)
+	}
+}
+
+func TestOnSignalingErrorWithoutGeneration(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event SignalingErrorEvent
+	session.OnSignalingError(func(e SignalingErrorEvent) {
+		event = e
+	})
+	fake.channel.emit(EventRTCSignalingError, map[string]interface{}{
+		"message": "failed to set remote description",
+	})
+
+	if event.Message != "failed to set remote description" {
+		t.Fatalf("unexpected message: %q", event.Message)
+	}
+	if event.Generation != nil {
+		t.Fatalf("expected absent generation to stay nil: %#v", event.Generation)
+	}
+}
+
 func awaitStartPayload(t *testing.T, fake *fakeSocket) map[string]interface{} {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -817,7 +958,7 @@ func TestStartResponseAndWaitContextTimeout(t *testing.T) {
 }
 
 func TestMapChannelStateDeclined(t *testing.T) {
-	if got := mapChannelState(pondsocket.ChannelState("DECLINED")); got != channelStateDeclined {
+	if got := mapChannelState(pondsocket.Declined); got != channelStateDeclined {
 		t.Fatalf("expected declined mapping, got %q", got)
 	}
 	if got := mapChannelState(pondsocket.Joined); got != channelStateJoined {

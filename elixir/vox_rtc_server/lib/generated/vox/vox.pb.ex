@@ -992,12 +992,6 @@ defmodule Vox.ConversationTurnPolicy do
     json_name: "maxEndpointingDelayMs"
   )
 
-  field(:stable_speaking_min_ms, 4,
-    proto3_optional: true,
-    type: :uint32,
-    json_name: "stableSpeakingMinMs"
-  )
-
   field(:false_interruption_timeout_ms, 5,
     proto3_optional: true,
     type: :uint32,

@@ -52,9 +52,11 @@ defmodule VoxRtcServer.Client do
 
   @impl true
   def handle_call({:create_controlled_session, options, caller}, _from, state) do
-    request = %Vox.RtcCreateSessionRequest{
-      browser_events: Keyword.get(options, :browser_events, false)
-    }
+    request =
+      case Keyword.fetch(options, :browser_events) do
+        {:ok, browser_events} -> %Vox.RtcCreateSessionRequest{browser_events: browser_events}
+        :error -> %Vox.RtcCreateSessionRequest{}
+      end
 
     with {:ok, raw_bootstrap} <-
            state.transport.create_session(state.channel, request, state.call_options),
@@ -86,10 +88,6 @@ defmodule VoxRtcServer.Client do
 
   @impl true
   def terminate(_reason, state) do
-    Enum.each(state.sessions, fn {_monitor, session} ->
-      Session.close(session, "client_closed")
-    end)
-
     state.transport.disconnect(state.channel)
     :ok
   end

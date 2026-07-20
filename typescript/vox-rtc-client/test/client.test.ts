@@ -75,43 +75,6 @@ class MockAudioElement {
   }
 }
 
-class MockAnalyser {
-  fftSize = 512;
-  smoothingTimeConstant = 0;
-  amplitude = 0;
-  getByteTimeDomainData(data: Uint8Array) {
-    data.fill(128 + this.amplitude);
-  }
-  disconnect() {}
-}
-
-class MockAudioSource {
-  connect(_node: unknown) {}
-  disconnect() {}
-}
-
-class MockAudioContext {
-  static instances: MockAudioContext[] = [];
-  state: AudioContextState = "running";
-  analyser = new MockAnalyser();
-  source = new MockAudioSource();
-  closed = false;
-
-  constructor() {
-    MockAudioContext.instances.push(this);
-  }
-  createMediaStreamSource() {
-    return this.source as unknown as MediaStreamAudioSourceNode;
-  }
-  createAnalyser() {
-    return this.analyser as unknown as AnalyserNode;
-  }
-  async resume() {}
-  async close() {
-    this.closed = true;
-  }
-}
-
 class MockPeerConnection {
   static instances: MockPeerConnection[] = [];
   connectionState: RTCPeerConnectionState = "new";
@@ -188,7 +151,6 @@ class MockPeerConnection {
 type ClientMessage = {
   id: string;
   type: string;
-  capability: string;
   data: Record<string, unknown>;
 };
 
@@ -209,7 +171,6 @@ class MockWebSocket implements WebSocketLike {
     this.readyState = 1;
     this.onopen?.({} as Event);
     this.server("gateway.ready", {
-      capability: "c".repeat(43),
       session: READY_SESSION,
       ...readyData,
     });
@@ -367,17 +328,6 @@ test("gateway events queued before ready are replayed after session setup", asyn
   await client.disconnect();
 });
 
-test("gateway ready rejects leaked Vox connection details", async () => {
-  const { client } = createHarness({
-    readyData: { clientToken: "must-not-leak" },
-  });
-  await assert.rejects(
-    client.connect(),
-    /forbidden private field: clientToken/,
-  );
-  assert.equal(client.state.status, "closed");
-});
-
 test("signaling endpoint rejects cross-origin URLs", () => {
   assert.throws(
     () =>
@@ -533,7 +483,7 @@ test("Vox speech events drive audio ducking over the gateway", async () => {
     onSocket: answerOffers,
     client: {
       audioElement: audio as unknown as HTMLAudioElement,
-      audioDucking: { mode: "vox", duckVolume: 0.2, releaseDelayMs: 0 },
+      audioDucking: { duckVolume: 0.2, releaseDelayMs: 0 },
     },
   });
   await client.connect();
@@ -544,38 +494,6 @@ test("Vox speech events drive audio ducking over the gateway", async () => {
   await delay();
   assert.equal(audio.volume, 0.8);
   await client.disconnect();
-});
-
-test("local ducking still works without creating a second signaling path", async () => {
-  const previous = globalThis.AudioContext;
-  Object.defineProperty(globalThis, "AudioContext", {
-    configurable: true,
-    value: MockAudioContext,
-  });
-  MockAudioContext.instances = [];
-  const audio = new MockAudioElement();
-  const { client, sockets } = createHarness({
-    onSocket: answerOffers,
-    client: {
-      audioElement: audio as unknown as HTMLAudioElement,
-      audioDucking: { mode: "local", threshold: 0.01, pollIntervalMs: 16 },
-    },
-  });
-  try {
-    await client.connect();
-    const audioContext = itemAt(MockAudioContext.instances, 0, "audio context");
-    audioContext.analyser.amplitude = 30;
-    await delay(25);
-    assert.equal(audio.volume, 0.2);
-    assert.equal(sockets.length, 1);
-    await client.disconnect();
-    assert.equal(audioContext.closed, true);
-  } finally {
-    Object.defineProperty(globalThis, "AudioContext", {
-      configurable: true,
-      value: previous,
-    });
-  }
 });
 
 test("unexpected gateway close tears down media and reports closed state", async () => {
@@ -630,6 +548,82 @@ test("signaling error frames surface as typed session errors", async () => {
     },
   ]);
   assert.deepEqual(errors.map(isFatalVoxError), [false, true, false]);
+  await client.disconnect();
+});
+
+test("rtc.signaling_error frames surface as terminal session errors", async () => {
+  const { client, sockets } = createHarness({ onSocket: answerOffers });
+  const errors: VoxRtcSessionError[] = [];
+  client.onSessionError((error) => errors.push(error));
+  await client.connect();
+  const socket = itemAt(sockets, 0, "gateway socket");
+  socket.server("rtc.signaling_error", {
+    message: "failed to apply local description",
+    generation: 2,
+  });
+  assert.deepEqual(errors, [
+    {
+      message: "failed to apply local description",
+      code: undefined,
+      recoverable: false,
+      generationId: undefined,
+    },
+  ]);
+  assert.deepEqual(errors.map(isFatalVoxError), [true]);
+  await client.disconnect();
+});
+
+test("a signaling error correlated to the pending offer fails the negotiation", async () => {
+  const { client } = createHarness({
+    onSocket: (socket) => {
+      socket.onSend = (message) => {
+        if (message.type !== "rtc.offer") return;
+        queueMicrotask(() => {
+          socket.server(
+            "rtc.signaling_error",
+            {
+              message: "failed to apply local description",
+              code: "session_failed",
+              recoverable: false,
+            },
+            message.id,
+          );
+        });
+      };
+    },
+  });
+  await assert.rejects(
+    client.connect(),
+    /failed to apply local description/,
+  );
+  assert.equal(client.state.status, "closed");
+});
+
+test("a conversation error during a pending offer does not fail the negotiation", async () => {
+  const { client } = createHarness({
+    onSocket: (socket) => {
+      socket.onSend = (message) => {
+        if (message.type !== "rtc.offer") return;
+        socket.server("error", {
+          message: "stale generation",
+          code: "response_stale_generation",
+        });
+        queueMicrotask(() => {
+          socket.server(
+            "rtc.answer",
+            {
+              session_id: READY_SESSION.sessionId,
+              answer: { type: "answer", sdp: "answer-sdp" },
+            },
+            message.id,
+          );
+        });
+      };
+    },
+  });
+  const session = await client.connect();
+  assert.equal(session.sessionId, READY_SESSION.sessionId);
+  assert.equal(client.state.status, "connected");
   await client.disconnect();
 });
 

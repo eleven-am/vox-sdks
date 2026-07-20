@@ -1,4 +1,3 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 
@@ -62,17 +61,14 @@ type GatewayClientFactory = (options: {
 interface GatewayClientMessage {
   id: string;
   type: string;
-  capability: string;
   data: Record<string, unknown>;
 }
 
 interface ActiveGatewaySession {
   ws: WebSocket;
   context: VoxRtcGatewaySessionContext;
-  capability: string;
   unsubscribe: Unsubscribe;
   pendingOfferId: string | null;
-  negotiationGeneration: number;
   rtcCloseRequested: boolean;
   closePromise: Promise<void> | null;
   setupPending: boolean;
@@ -97,12 +93,6 @@ function requestPath(request: IncomingMessage): string {
   );
 }
 
-function capabilityMatches(expected: string, received: string): boolean {
-  const left = Buffer.from(expected);
-  const right = Buffer.from(received);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
 function parseClientMessage(raw: RawData): GatewayClientMessage {
   let parsed: unknown;
   try {
@@ -115,14 +105,10 @@ function parseClientMessage(raw: RawData): GatewayClientMessage {
   }
   const id = typeof parsed.id === "string" ? parsed.id.trim() : "";
   const type = typeof parsed.type === "string" ? parsed.type.trim() : "";
-  const capability =
-    typeof parsed.capability === "string" ? parsed.capability : "";
-  if (!id || !type || !capability || !isRecord(parsed.data)) {
-    throw new Error(
-      "RTC gateway message requires id, type, capability, and object data",
-    );
+  if (!id || !type || !isRecord(parsed.data)) {
+    throw new Error("RTC gateway message requires id, type, and object data");
   }
-  return { id, type, capability, data: parsed.data };
+  return { id, type, data: parsed.data };
 }
 
 function sessionDescription(value: unknown): VoxRtcSessionDescription {
@@ -154,11 +140,10 @@ function iceCandidate(value: unknown): VoxRtcIceCandidate | null {
   };
 }
 
-function negotiationGeneration(value: unknown): number {
-  if (!Number.isSafeInteger(value) || Number(value) < 1) {
-    throw new Error("RTC signaling requires a positive negotiation generation");
-  }
-  return Number(value);
+function optionalGeneration(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 1
+    ? Number(value)
+    : undefined;
 }
 
 export interface VoxRtcGateway {
@@ -276,10 +261,8 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
       active = {
         ws,
         context,
-        capability: randomBytes(32).toString("base64url"),
         unsubscribe: () => {},
         pendingOfferId: null,
-        negotiationGeneration: 0,
         rtcCloseRequested: false,
         closePromise: null,
         setupPending: true,
@@ -344,7 +327,6 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
       }
 
       this.#send(active, "gateway.ready", {
-        capability: active.capability,
         session: {
           sessionId: controlled.bootstrap.sessionId,
           expiresAt: controlled.bootstrap.expiresAt,
@@ -374,39 +356,21 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
     try {
       const message = parseClientMessage(raw);
       requestId = message.id;
-      if (!capabilityMatches(active.capability, message.capability)) {
-        this.#send(
-          active,
-          "gateway.error",
-          { message: "Invalid RTC gateway capability" },
-          message.id,
-        );
-        await this.#requestClose(active, "invalid_capability");
-        active.ws.close(1008, "Invalid capability");
-        return;
-      }
 
       if (message.type === "rtc.offer") {
         if (active.pendingOfferId !== null) {
           throw new Error("An RTC offer is already pending");
         }
-        const generation = negotiationGeneration(message.data.generation);
-        if (generation <= active.negotiationGeneration) {
-          throw new Error(`Stale RTC offer generation: ${generation}`);
-        }
+        const generation = optionalGeneration(message.data.generation);
         const offer = sessionDescription(message.data.offer);
-        active.negotiationGeneration = generation;
         active.pendingOfferId = message.id;
         active.context.session.sendOffer(offer, {
           restart: message.data.restart === true,
+          ...(generation !== undefined ? { generation } : {}),
         });
         return;
       }
       if (message.type === "rtc.ice_candidate") {
-        const generation = negotiationGeneration(message.data.generation);
-        if (generation !== active.negotiationGeneration) {
-          throw new Error(`Stale RTC candidate generation: ${generation}`);
-        }
         active.context.session.sendIceCandidate(
           iceCandidate(message.data.candidate),
         );
@@ -438,18 +402,15 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
   }
 
   #forwardEvent(active: ActiveGatewaySession, event: VoxRtcWireEvent): void {
-    const requestId =
-      event.type === "rtc.answer" || event.type === "error"
-        ? (active.pendingOfferId ?? undefined)
-        : undefined;
-    if (event.type === "rtc.answer" || event.type === "error") {
+    const correlates =
+      event.type === "rtc.answer" || event.type === "rtc.signaling_error";
+    const requestId = correlates
+      ? (active.pendingOfferId ?? undefined)
+      : undefined;
+    if (correlates) {
       active.pendingOfferId = null;
     }
-    const data =
-      event.type === "rtc.ice_candidate"
-        ? { ...event.data, generation: active.negotiationGeneration }
-        : event.data;
-    this.#send(active, event.type, data, requestId);
+    this.#send(active, event.type, event.data ?? {}, requestId);
     if (event.type === "rtc.session.closed") {
       active.rtcCloseRequested = true;
       const reason = String(event.data.reason ?? "session_closed");

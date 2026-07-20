@@ -147,7 +147,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_RTC_SESSION_ATTACHED, move |payload| {
             handler(SessionAttachedEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 data: payload,
             })
@@ -163,7 +163,7 @@ impl VoxRtcControlSession {
         self.on(EVENT_SESSION_CREATED, move |payload| {
             let session = payload.get("session").and_then(Value::as_object).cloned();
             handler(SessionCreatedEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 data: payload,
                 session,
@@ -179,7 +179,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_TRANSCRIPT_COMPLETED, move |payload| {
             handler(TranscriptEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 transcript: required_string(&payload, "transcript", ""),
                 language: optional_string(&payload, "language"),
@@ -187,6 +187,8 @@ impl VoxRtcControlSession {
                 end_ms: optional_number(&payload, "end_ms"),
                 eou_probability: optional_number(&payload, "eou_probability"),
                 topics: optional_string_vec(&payload, "topics"),
+                entities: transcript_entities(&payload),
+                words: transcript_words(&payload),
                 data: payload,
             });
         })
@@ -200,7 +202,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_TURN_STATE_CHANGED, move |payload| {
             handler(TurnStateEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 state: required_string(&payload, "state", "unknown"),
                 previous_state: optional_string(&payload, "previous_state"),
@@ -217,7 +219,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_SPEECH_STARTED, move |payload| {
             handler(SpeechStartedEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 timestamp_ms: optional_number(&payload, "timestamp_ms"),
                 data: payload,
@@ -233,7 +235,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_SPEECH_STOPPED, move |payload| {
             handler(SpeechStoppedEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 timestamp_ms: optional_number(&payload, "timestamp_ms"),
                 data: payload,
@@ -249,7 +251,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_TRANSCRIPT_DELTA, move |payload| {
             handler(TranscriptDeltaEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 delta: required_string(&payload, "delta", ""),
                 start_ms: optional_number(&payload, "start_ms"),
@@ -267,7 +269,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_TURN_EOU_PREDICTED, move |payload| {
             handler(TurnEouPredictedEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 probability: optional_number(&payload, "probability"),
                 threshold: optional_number(&payload, "threshold"),
@@ -353,6 +355,7 @@ impl VoxRtcControlSession {
                 response: response_event(payload.clone(), &session_id, &channel_name),
                 vad_active_ms: optional_number(&payload, "vad_active_ms"),
                 partial_transcript: optional_string(&payload, "partial_transcript"),
+                reason: optional_nonempty_string(&payload, "reason"),
             });
         })
     }
@@ -365,7 +368,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_BROWSER_EVENT, move |payload| {
             handler(BrowserEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 event: required_string(&payload, "event", ""),
                 payload: payload.get("payload").cloned().unwrap_or(Value::Null),
@@ -382,7 +385,7 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_RTC_CLIENT_DISCONNECTED, move |payload| {
             handler(CloseEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 reason: required_string(&payload, "reason", "unknown"),
                 connection_state: optional_string(&payload, "connection_state"),
@@ -401,12 +404,29 @@ impl VoxRtcControlSession {
         let channel_name = self.channel_name.clone();
         self.on(EVENT_ERROR, move |payload| {
             handler(ErrorEvent {
-                session_id: base_session_id(&payload, &session_id),
+                session_id: session_id.clone(),
                 channel_name: channel_name.clone(),
                 message: optional_string(&payload, "message"),
                 code: optional_nonempty_string(&payload, "code"),
                 recoverable: recoverable_flag(&payload),
                 generation_id: optional_nonempty_string(&payload, "generation_id"),
+                data: payload,
+            });
+        })
+    }
+
+    pub fn on_signaling_error<F>(&self, handler: F) -> Listener
+    where
+        F: Fn(SignalingErrorEvent) + Send + Sync + 'static,
+    {
+        let session_id = self.session_id.clone();
+        let channel_name = self.channel_name.clone();
+        self.on(EVENT_RTC_SIGNALING_ERROR, move |payload| {
+            handler(SignalingErrorEvent {
+                session_id: session_id.clone(),
+                channel_name: channel_name.clone(),
+                message: optional_string(&payload, "message"),
+                generation: optional_i64(&payload, "generation"),
                 data: payload,
             });
         })
@@ -660,13 +680,9 @@ fn explicit_generation(options: &Option<ResponseOptions>) -> Option<String> {
         .filter(|id| !id.is_empty())
 }
 
-fn base_session_id(payload: &EventData, fallback: &str) -> String {
-    required_string(payload, "session_id", fallback)
-}
-
 fn response_event(payload: EventData, session_id: &str, channel_name: &str) -> ResponseEvent {
     ResponseEvent {
-        session_id: base_session_id(&payload, session_id),
+        session_id: session_id.to_owned(),
         channel_name: channel_name.to_owned(),
         response_id: optional_string(&payload, "response_id"),
         generation_id: optional_nonempty_string(&payload, "generation_id"),
@@ -895,6 +911,135 @@ mod tests {
         let interruption = recv(&mut int_rx).await;
         assert_eq!(interruption.response.generation_id.as_deref(), Some("gen-2"));
         assert_eq!(interruption.vad_active_ms, Some(250.0));
+    }
+
+    #[tokio::test]
+    async fn on_signaling_error_parses_message_and_generation() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_signaling_error(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_RTC_SIGNALING_ERROR.to_owned(),
+                payload(json!({
+                    "message": "setLocalDescription failed",
+                    "generation": 3
+                })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.message.as_deref(), Some("setLocalDescription failed"));
+        assert_eq!(event.generation, Some(3));
+    }
+
+    #[tokio::test]
+    async fn on_signaling_error_leaves_generation_none_when_absent() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_signaling_error(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_RTC_SIGNALING_ERROR.to_owned(),
+                payload(json!({ "message": "RTC signaling failed" })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.message.as_deref(), Some("RTC signaling failed"));
+        assert_eq!(event.generation, None);
+    }
+
+    #[tokio::test]
+    async fn on_transcript_exposes_entities_and_words() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_transcript(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_TRANSCRIPT_COMPLETED.to_owned(),
+                payload(json!({
+                    "transcript": "call Ada",
+                    "entities": [
+                        { "type": "PRODUCT", "text": "Ada", "start_char": 5, "end_char": 8 }
+                    ],
+                    "words": [
+                        { "word": "call", "start_ms": 0, "end_ms": 300 },
+                        { "word": "Ada", "start_ms": 300, "end_ms": 600, "confidence": 0.91 }
+                    ]
+                })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(
+            event.entities,
+            vec![TranscriptEntity {
+                r#type: "PRODUCT".to_owned(),
+                text: "Ada".to_owned(),
+                start_char: 5,
+                end_char: 8,
+            }]
+        );
+        assert_eq!(event.words.len(), 2);
+        assert_eq!(event.words[0].word, "call");
+        assert_eq!(event.words[0].start_ms, 0.0);
+        assert_eq!(event.words[0].confidence, None);
+        assert_eq!(event.words[1].confidence, Some(0.91));
+    }
+
+    #[tokio::test]
+    async fn on_transcript_defaults_entities_and_words_to_empty() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_transcript(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_TRANSCRIPT_COMPLETED.to_owned(),
+                payload(json!({ "transcript": "hello" })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert!(event.entities.is_empty());
+        assert!(event.words.is_empty());
+    }
+
+    #[tokio::test]
+    async fn interruption_events_expose_reason() {
+        let (session, sender) = session().await;
+        let (det_tx, mut det_rx) = mpsc::unbounded_channel();
+        let _detected = session.on_interruption_detected(move |event| {
+            det_tx.send(event).unwrap();
+        });
+        let (fp_tx, mut fp_rx) = mpsc::unbounded_channel();
+        let _false_positive = session.on_interruption_false_positive(move |event| {
+            fp_tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_INTERRUPTION_DETECTED.to_owned(),
+                payload(json!({
+                    "response_id": "resp-3",
+                    "generation_id": "gen-3",
+                    "reason": "speech_overlap"
+                })),
+            ))
+            .unwrap();
+        sender
+            .send((
+                EVENT_INTERRUPTION_FALSE_POSITIVE.to_owned(),
+                payload(json!({ "response_id": "resp-3", "reason": "backchannel" })),
+            ))
+            .unwrap();
+        let detected = recv(&mut det_rx).await;
+        assert_eq!(detected.reason.as_deref(), Some("speech_overlap"));
+        let false_positive = recv(&mut fp_rx).await;
+        assert_eq!(false_positive.reason.as_deref(), Some("backchannel"));
     }
 
     #[tokio::test]

@@ -39,6 +39,16 @@ export function parseVoxSessionError(frame: unknown): VoxRtcSessionError {
   };
 }
 
+export function parseVoxSignalingError(frame: unknown): VoxRtcSessionError {
+  const payload = isRecord(frame) ? frame : {};
+  return {
+    message: nonEmptyString(payload.message),
+    code: undefined,
+    recoverable: false,
+    generationId: undefined,
+  };
+}
+
 export function isFatalVoxError(frame: unknown): boolean {
   const error = parseVoxSessionError(frame);
   return error.recoverable === false || error.code === "session_failed";

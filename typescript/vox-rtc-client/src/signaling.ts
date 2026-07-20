@@ -6,26 +6,11 @@ import type {
 } from "./types.js";
 
 const OPEN = 1;
-const FORBIDDEN_GATEWAY_KEYS = new Set([
-  "clientToken",
-  "client_token",
-  "voxHttpBase",
-  "vox_http_base",
-  "mediaToken",
-  "media_token",
-  "eventsUrl",
-  "events_url",
-]);
 
 interface PendingRequest {
   resolve: (description: RTCSessionDescriptionInit) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
-}
-
-interface GatewayReadyData {
-  capability: string;
-  session: VoxRtcBrowserSessionBootstrap;
 }
 
 export interface GatewaySignalingOptions {
@@ -76,25 +61,7 @@ function parseEvent(data: unknown): VoxRtcSignalingEvent {
   };
 }
 
-function assertNoPrivateFields(value: unknown): void {
-  if (Array.isArray(value)) {
-    value.forEach(assertNoPrivateFields);
-    return;
-  }
-  if (!isRecord(value)) return;
-  for (const [key, child] of Object.entries(value)) {
-    if (FORBIDDEN_GATEWAY_KEYS.has(key)) {
-      throw new Error(`RTC gateway exposed forbidden private field: ${key}`);
-    }
-    assertNoPrivateFields(child);
-  }
-}
-
-function normalizeReady(data: Record<string, unknown>): GatewayReadyData {
-  assertNoPrivateFields(data);
-  if (typeof data.capability !== "string" || data.capability.length < 32) {
-    throw new Error("RTC gateway ready event is missing its capability");
-  }
+function normalizeReady(data: Record<string, unknown>): VoxRtcBrowserSessionBootstrap {
   if (!isRecord(data.session)) {
     throw new Error("RTC gateway ready event is missing its session");
   }
@@ -109,17 +76,14 @@ function normalizeReady(data: Record<string, unknown>): GatewayReadyData {
     throw new Error("RTC gateway ready event contains an invalid session");
   }
   return {
-    capability: data.capability,
-    session: {
-      sessionId,
-      iceServers: iceServers as RTCIceServer[],
-      expiresAt:
-        typeof session.expiresAt === "string" ? session.expiresAt : undefined,
-      attachTtlSeconds:
-        typeof session.attachTtlSeconds === "number"
-          ? session.attachTtlSeconds
-          : undefined,
-    },
+    sessionId,
+    iceServers: iceServers as RTCIceServer[],
+    expiresAt:
+      typeof session.expiresAt === "string" ? session.expiresAt : undefined,
+    attachTtlSeconds:
+      typeof session.attachTtlSeconds === "number"
+        ? session.attachTtlSeconds
+        : undefined,
   };
 }
 
@@ -154,7 +118,6 @@ export class GatewaySignalingClient {
   readonly #onClose: (reason: string) => void;
   readonly #pending = new Map<string, PendingRequest>();
   #socket: WebSocketLike | null = null;
-  #capability: string | null = null;
   #nextId = 0;
   #negotiationGeneration = 0;
   #closed = false;
@@ -202,11 +165,10 @@ export class GatewaySignalingClient {
               queued.push(event);
               return;
             }
-            const ready = normalizeReady(event.data);
-            this.#capability = ready.capability;
+            const session = normalizeReady(event.data);
             settled = true;
             clearTimeout(timer);
-            resolve(ready.session);
+            resolve(session);
             queued.forEach((item) => {
               this.#dispatch(item);
             });
@@ -278,7 +240,7 @@ export class GatewaySignalingClient {
     if (this.#closed) return;
     this.#closed = true;
     const socket = this.#socket;
-    if (socket?.readyState === OPEN && this.#capability) {
+    if (socket?.readyState === OPEN) {
       try {
         this.#send(this.#id("close"), "rtc.close", { reason });
       } catch {}
@@ -304,7 +266,7 @@ export class GatewaySignalingClient {
         pending &&
         (event.type === "rtc.answer" ||
           event.type === "gateway.error" ||
-          event.type === "error")
+          event.type === "rtc.signaling_error")
       ) {
         clearTimeout(pending.timer);
         this.#pending.delete(event.id);
@@ -330,12 +292,10 @@ export class GatewaySignalingClient {
 
   #send(id: string, type: string, data: Record<string, unknown>): void {
     const socket = this.#socket;
-    if (!socket || socket.readyState !== OPEN || !this.#capability) {
+    if (!socket || socket.readyState !== OPEN) {
       throw new Error("RTC gateway signaling is not ready");
     }
-    socket.send(
-      JSON.stringify({ id, type, capability: this.#capability, data }),
-    );
+    socket.send(JSON.stringify({ id, type, data }));
   }
 
   #id(prefix: string): string {

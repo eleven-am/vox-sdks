@@ -5,21 +5,50 @@ use pondsocket_client::{
     PondClient,
 };
 use pondsocket_common::{ChannelEvent, ChannelState as PondChannelState};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
+use tokio::task::JoinHandle;
 
 const INITIAL_RECONNECT_DELAY: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
 pub(crate) struct RawSocketClient {
     client: PondClient,
-    params: EventData,
     state_tx: watch::Sender<ConnectionState>,
     active: Arc<AtomicBool>,
-    supervisor_started: Arc<AtomicBool>,
+    supervisor: Arc<ReconnectSupervisor>,
     max_reconnect_delay: Duration,
+}
+
+struct ReconnectSupervisor {
+    handle: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl ReconnectSupervisor {
+    fn new() -> Self {
+        Self {
+            handle: Mutex::new(None),
+        }
+    }
+
+    fn abort(&self) {
+        if let Some(handle) = self
+            .handle
+            .lock()
+            .expect("reconnect supervisor mutex poisoned")
+            .take()
+        {
+            handle.abort();
+        }
+    }
+}
+
+impl Drop for ReconnectSupervisor {
+    fn drop(&mut self) {
+        self.abort();
+    }
 }
 
 #[derive(Clone)]
@@ -40,29 +69,33 @@ impl RawSocketClient {
             connection_timeout,
             ..ClientOptions::default()
         };
-        let client = PondClient::with_options(endpoint, Some(params.clone()), options)?;
+        let client = PondClient::with_options(endpoint, Some(params), options)?;
         let (state_tx, _) = watch::channel(map_connection_state(client.state()));
 
         Ok(Self {
             client,
-            params,
             state_tx,
             active: Arc::new(AtomicBool::new(false)),
-            supervisor_started: Arc::new(AtomicBool::new(false)),
+            supervisor: Arc::new(ReconnectSupervisor::new()),
             max_reconnect_delay,
         })
     }
 
     fn ensure_supervisor(&self) {
-        if self.supervisor_started.swap(true, Ordering::SeqCst) {
+        let mut slot = self
+            .supervisor
+            .handle
+            .lock()
+            .expect("reconnect supervisor mutex poisoned");
+        if slot.as_ref().is_some_and(|handle| !handle.is_finished()) {
             return;
         }
-        spawn_reconnect_supervisor(
+        *slot = Some(spawn_reconnect_supervisor(
             self.client.clone(),
             self.state_tx.clone(),
             self.active.clone(),
             self.max_reconnect_delay,
-        );
+        ));
     }
 
     pub(crate) fn state(&self) -> ConnectionState {
@@ -86,6 +119,7 @@ impl RawSocketClient {
 
     pub(crate) async fn disconnect(&self) {
         self.active.store(false, Ordering::SeqCst);
+        self.supervisor.abort();
         self.client.disconnect().await;
         self.state_tx
             .send_replace(map_connection_state(self.client.state()));
@@ -100,9 +134,24 @@ impl RawSocketClient {
         RawSocketChannel::new(channel)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn params(&self) -> &EventData {
-        &self.params
+    #[cfg(test)]
+    pub(crate) fn supervisor_present(&self) -> bool {
+        self.supervisor
+            .handle
+            .lock()
+            .expect("reconnect supervisor mutex poisoned")
+            .is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn supervisor_finished(&self) -> bool {
+        self.supervisor
+            .handle
+            .lock()
+            .expect("reconnect supervisor mutex poisoned")
+            .as_ref()
+            .map(JoinHandle::is_finished)
+            .unwrap_or(true)
     }
 }
 
@@ -111,16 +160,19 @@ fn spawn_reconnect_supervisor(
     state_tx: watch::Sender<ConnectionState>,
     active: Arc<AtomicBool>,
     max_reconnect_delay: Duration,
-) {
+) -> JoinHandle<()> {
     let mut states = client.subscribe_state();
     tokio::spawn(async move {
         loop {
             if states.changed().await.is_err() {
                 break;
             }
+            if !active.load(Ordering::SeqCst) {
+                break;
+            }
             let current = *states.borrow_and_update();
             state_tx.send_replace(map_connection_state(current));
-            if current != PondConnectionState::Disconnected || !active.load(Ordering::SeqCst) {
+            if current != PondConnectionState::Disconnected {
                 continue;
             }
             let mut delay = INITIAL_RECONNECT_DELAY;
@@ -138,7 +190,7 @@ fn spawn_reconnect_supervisor(
                 delay = next_reconnect_delay(delay, max_reconnect_delay);
             }
         }
-    });
+    })
 }
 
 fn next_reconnect_delay(current: Duration, max: Duration) -> Duration {
@@ -305,6 +357,110 @@ mod tests {
             Duration::from_secs(5)
         );
         assert_eq!(next_reconnect_delay(max, max), max);
+    }
+
+    #[tokio::test]
+    async fn reconnect_supervisor_terminates_after_disconnect() {
+        let client = RawSocketClient::new(
+            "ws://localhost/socket",
+            EventData::new(),
+            Duration::from_millis(50),
+            Duration::from_secs(1),
+        )
+        .expect("valid socket client");
+
+        client.active.store(true, Ordering::SeqCst);
+        client.ensure_supervisor();
+        assert!(
+            !client.supervisor_finished(),
+            "supervisor task must be running once started"
+        );
+
+        client.disconnect().await;
+
+        let terminated = tokio::time::timeout(Duration::from_secs(2), async {
+            while !client.supervisor_finished() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(
+            terminated.is_ok(),
+            "supervisor task must finish after disconnect flips active false"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_supervisor_respawns_after_disconnect_reconnect() {
+        let client = RawSocketClient::new(
+            "ws://localhost/socket",
+            EventData::new(),
+            Duration::from_millis(50),
+            Duration::from_secs(1),
+        )
+        .expect("valid socket client");
+
+        client.active.store(true, Ordering::SeqCst);
+        client.ensure_supervisor();
+        assert!(
+            !client.supervisor_finished(),
+            "supervisor task must be running once started"
+        );
+
+        client.disconnect().await;
+
+        let terminated = tokio::time::timeout(Duration::from_secs(2), async {
+            while !client.supervisor_finished() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(
+            terminated.is_ok(),
+            "supervisor task must finish after disconnect flips active false"
+        );
+
+        client.active.store(true, Ordering::SeqCst);
+        client.ensure_supervisor();
+        assert!(
+            !client.supervisor_finished(),
+            "reconnect must replace the finished supervisor handle with a live one"
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_clears_supervisor_slot_then_connect_respawns() {
+        let client = RawSocketClient::new(
+            "ws://localhost/socket",
+            EventData::new(),
+            Duration::from_millis(50),
+            Duration::from_secs(1),
+        )
+        .expect("valid socket client");
+
+        client.active.store(true, Ordering::SeqCst);
+        client.ensure_supervisor();
+        assert!(
+            client.supervisor_present(),
+            "supervisor handle must be present once started"
+        );
+
+        client.disconnect().await;
+        assert!(
+            !client.supervisor_present(),
+            "disconnect must take the supervisor handle out of the slot"
+        );
+
+        client.active.store(true, Ordering::SeqCst);
+        client.ensure_supervisor();
+        assert!(
+            client.supervisor_present(),
+            "an immediate reconnect must repopulate the empty slot"
+        );
+        assert!(
+            !client.supervisor_finished(),
+            "the respawned supervisor must be live"
+        );
     }
 
     #[tokio::test]

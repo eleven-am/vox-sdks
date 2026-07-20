@@ -454,6 +454,92 @@ defmodule VoxRtcServer.ClientTest do
     assert_receive {:DOWN, ^session_monitor, :process, ^session, :normal}
   end
 
+  test "forwards an explicit browser_events preference and omits it otherwise", %{
+    client: client
+  } do
+    task =
+      Task.async(fn ->
+        Client.create_controlled_session(client,
+          browser_events: true,
+          attach_timeout: 30,
+          timeout: 1_000,
+          subscriber: self()
+        )
+      end)
+
+    assert_receive {:create_session, caller, reference, request, _options}
+    assert request.browser_events == true
+
+    bootstrap = %Vox.RtcSessionBootstrap{
+      session_id: "rtc_test",
+      expires_at: "2026-07-16T22:00:00Z",
+      attach_ttl_seconds: 30,
+      ice_servers: []
+    }
+
+    send(caller, {:create_session_reply, reference, {:ok, bootstrap}})
+
+    assert Task.await(task) == {:error, :attach_timeout}
+  end
+
+  test "turn policy no longer advertises the server-reserved stable_speaking_min_ms knob", %{
+    client: client
+  } do
+    refute Map.has_key?(%VoxRtcServer.TurnPolicy{}, :stable_speaking_min_ms)
+    refute Map.has_key?(%Vox.ConversationTurnPolicy{}, :stable_speaking_min_ms)
+
+    {_bootstrap, session, stream, _receiver} = create_attached_session(client)
+
+    assert :ok =
+             Session.configure(session, %SessionConfig{
+               policy: %VoxRtcServer.TurnPolicy{
+                 allow_interrupt_while_speaking: true,
+                 min_interrupt_words: 3
+               }
+             })
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{
+                      msg: {:session_update, %Vox.ConversationSessionUpdate{policy: policy}}
+                    }}
+
+    assert policy.allow_interrupt_while_speaking == true
+    assert policy.min_interrupt_words == 3
+  end
+
+  test "a terminal response error clears the ambient generation for the next append", %{
+    client: client
+  } do
+    {_bootstrap, session, stream, receiver} = create_attached_session(client)
+
+    assert :ok = Session.start_response(session, %ResponseOptions{})
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_start, start}}}
+
+    dead_generation = start.generation_id
+    assert dead_generation != ""
+
+    send_conversation(receiver, stream, :error, %Vox.ConversationError{
+      message: "response generation failed",
+      code: "response_failed",
+      recoverable: false,
+      generation_id: dead_generation
+    })
+
+    assert_receive {:vox_rtc, ^session,
+                    %Event{type: :error, payload: %ErrorEvent{code: "response_failed"}}}
+
+    assert :ok = Session.append_response_text(session, "after failure")
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_delta, delta}}}
+
+    assert delta.delta == "after failure"
+    refute delta.generation_id == dead_generation
+    assert delta.generation_id == ""
+  end
+
   defp create_attached_session(client) do
     subscriber = self()
     task = Task.async(fn -> Client.create_controlled_session(client, subscriber: subscriber) end)
@@ -480,7 +566,7 @@ defmodule VoxRtcServer.ClientTest do
 
   defp reply_to_create do
     assert_receive {:create_session, caller, reference, request, options}
-    assert request.browser_events == false
+    assert request.browser_events == nil
     assert options[:metadata] == %{"authorization" => "Bearer secret"}
 
     bootstrap = %Vox.RtcSessionBootstrap{

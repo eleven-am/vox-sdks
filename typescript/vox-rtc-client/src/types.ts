@@ -31,18 +31,10 @@ export interface VoxRtcClientEventEnvelope {
   generationId?: string;
 }
 
-export type VoxRtcAudioDuckingMode = "vox" | "local" | "hybrid";
-
 export interface VoxRtcAudioDuckingOptions {
   enabled?: boolean;
-  mode?: VoxRtcAudioDuckingMode;
-  threshold?: number;
   duckVolume?: number;
-  sustainedVolume?: number;
-  sustainedAfterMs?: number;
-  localHoldMs?: number;
   releaseDelayMs?: number;
-  pollIntervalMs?: number;
 }
 
 export type VoxRtcControlEventLike = string | {

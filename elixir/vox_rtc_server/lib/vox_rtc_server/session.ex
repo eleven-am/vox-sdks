@@ -41,7 +41,6 @@ defmodule VoxRtcServer.Session do
     closed_emitted?: false,
     terminal_error: nil,
     attach_waiters: [],
-    response_generation_counter: 0,
     response_generation_id: nil,
     response_waiters: %{},
     subscribers: %{},
@@ -401,12 +400,11 @@ defmodule VoxRtcServer.Session do
   end
 
   defp ensure_generation(state, %ResponseOptions{} = options) do
-    counter = state.response_generation_counter + 1
     unique = System.unique_integer([:positive, :monotonic]) |> Integer.to_string(36)
-    generation_id = "generation_#{Integer.to_string(counter, 36)}_#{unique}"
+    generation_id = "generation_#{unique}"
 
     {%ResponseOptions{options | generation_id: generation_id},
-     %{state | response_generation_counter: counter, response_generation_id: generation_id}}
+     %{state | response_generation_id: generation_id}}
   end
 
   defp current_generation(state, %ResponseOptions{generation_id: nil} = options),
@@ -459,7 +457,7 @@ defmodule VoxRtcServer.Session do
          %{response_generation_id: generation_id} = state,
          %Event{type: type, payload: payload}
        )
-       when type in [:response_done, :response_cancelled] do
+       when type in [:response_done, :response_cancelled, :error] and not is_nil(generation_id) do
     if Map.get(payload, :generation_id) == generation_id,
       do: %{state | response_generation_id: nil},
       else: state

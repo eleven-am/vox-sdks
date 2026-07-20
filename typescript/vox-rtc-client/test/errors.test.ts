@@ -6,6 +6,7 @@ import {
   isFatalVoxError,
   isVoxErrorCode,
   parseVoxSessionError,
+  parseVoxSignalingError,
   voxGenerationId,
 } from "../src/errors.js";
 
@@ -54,6 +55,30 @@ test("parseVoxSessionError treats non-object frames as recoverable empty errors"
     generationId: undefined,
   });
   assert.equal(parseVoxSessionError("boom").recoverable, true);
+});
+
+test("parseVoxSignalingError maps the terminal signaling frame vox actually sends", () => {
+  assert.deepEqual(
+    parseVoxSignalingError({
+      message: "failed to apply local description",
+      generation: 2,
+    }),
+    {
+      message: "failed to apply local description",
+      code: undefined,
+      recoverable: false,
+      generationId: undefined,
+    },
+  );
+});
+
+test("parseVoxSignalingError is terminal regardless of the frame contents", () => {
+  assert.equal(isFatalVoxError(parseVoxSignalingError({ message: "boom" })), true);
+  assert.equal(parseVoxSignalingError(null).recoverable, false);
+  assert.equal(
+    parseVoxSignalingError({ recoverable: true, code: "session_failed" }).recoverable,
+    false,
+  );
 });
 
 test("isVoxErrorCode matches the stable contract code set", () => {

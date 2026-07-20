@@ -85,6 +85,10 @@ export class VoxRtcServerClient {
     return this.#socket?.getState() ?? ConnectionState.DISCONNECTED;
   }
 
+  onConnectionChange(callback: (state: ConnectionState) => void): Unsubscribe {
+    return this.#ensureSocket().onConnectionChange(callback);
+  }
+
   async connect(): Promise<void> {
     const socket = this.#ensureSocket();
     if (socket.getState() === ConnectionState.CONNECTED) {

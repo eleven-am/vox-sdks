@@ -13,6 +13,7 @@ pub const EVENT_RESPONSE_COMMITTED: &str = "response.committed";
 pub const EVENT_RESPONSE_CREATED: &str = "response.created";
 pub const EVENT_RESPONSE_DONE: &str = "response.done";
 pub const EVENT_RTC_SESSION_ATTACHED: &str = "rtc.session.attached";
+pub const EVENT_RTC_SIGNALING_ERROR: &str = "rtc.signaling_error";
 pub const EVENT_SESSION_CREATED: &str = "session.created";
 pub const EVENT_TRANSCRIPT_COMPLETED: &str =
     "conversation.item.input_audio_transcription.completed";
@@ -65,20 +66,6 @@ pub struct SessionBootstrap {
     pub attach_ttl_seconds: u64,
     #[serde(default)]
     pub ice_servers: Vec<RtcIceServer>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RtcSessionDescription {
-    pub r#type: String,
-    pub sdp: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RtcIceCandidate {
-    pub candidate: String,
-    pub sdp_mid: Option<String>,
-    pub sdp_m_line_index: Option<u32>,
-    pub username_fragment: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -138,6 +125,24 @@ pub struct TranscriptEvent {
     pub end_ms: Option<f64>,
     pub eou_probability: Option<f64>,
     pub topics: Option<Vec<String>>,
+    pub entities: Vec<TranscriptEntity>,
+    pub words: Vec<TranscriptWord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptEntity {
+    pub r#type: String,
+    pub text: String,
+    pub start_char: u64,
+    pub end_char: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscriptWord {
+    pub word: String,
+    pub start_ms: f64,
+    pub end_ms: f64,
+    pub confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +209,7 @@ pub struct InterruptionEvent {
     pub response: ResponseEvent,
     pub vad_active_ms: Option<f64>,
     pub partial_transcript: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +244,15 @@ pub struct ErrorEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct SignalingErrorEvent {
+    pub session_id: String,
+    pub channel_name: String,
+    pub data: EventData,
+    pub message: Option<String>,
+    pub generation: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct StartAck {
     pub accepted: bool,
     pub generation_id: String,
@@ -261,6 +276,10 @@ pub(crate) fn optional_number(data: &EventData, key: &str) -> Option<f64> {
     data.get(key).and_then(Value::as_f64)
 }
 
+pub(crate) fn optional_i64(data: &EventData, key: &str) -> Option<i64> {
+    data.get(key).and_then(Value::as_i64)
+}
+
 pub(crate) fn optional_nonempty_string(data: &EventData, key: &str) -> Option<String> {
     optional_string(data, key).filter(|s| !s.is_empty())
 }
@@ -275,5 +294,39 @@ pub(crate) fn optional_string_vec(data: &EventData, key: &str) -> Option<Vec<Str
             .iter()
             .map(|item| item.as_str().map(ToOwned::to_owned))
             .collect()
+    })
+}
+
+pub(crate) fn transcript_entities(data: &EventData) -> Vec<TranscriptEntity> {
+    data.get("entities")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(transcript_entity).collect())
+        .unwrap_or_default()
+}
+
+fn transcript_entity(value: &Value) -> Option<TranscriptEntity> {
+    let object = value.as_object()?;
+    Some(TranscriptEntity {
+        r#type: optional_string(object, "type").unwrap_or_default(),
+        text: optional_string(object, "text").unwrap_or_default(),
+        start_char: object.get("start_char").and_then(Value::as_u64).unwrap_or(0),
+        end_char: object.get("end_char").and_then(Value::as_u64).unwrap_or(0),
+    })
+}
+
+pub(crate) fn transcript_words(data: &EventData) -> Vec<TranscriptWord> {
+    data.get("words")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(transcript_word).collect())
+        .unwrap_or_default()
+}
+
+fn transcript_word(value: &Value) -> Option<TranscriptWord> {
+    let object = value.as_object()?;
+    Some(TranscriptWord {
+        word: optional_string(object, "word").unwrap_or_default(),
+        start_ms: optional_number(object, "start_ms").unwrap_or(0.0),
+        end_ms: optional_number(object, "end_ms").unwrap_or(0.0),
+        confidence: optional_number(object, "confidence"),
     })
 }

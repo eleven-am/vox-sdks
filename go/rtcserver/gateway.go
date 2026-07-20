@@ -2,9 +2,6 @@ package rtcserver
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,22 +58,19 @@ type gatewaySession struct {
 	gateway     *Gateway
 	connection  *websocket.Conn
 	context     GatewaySessionContext
-	capability  string
 	unsubscribe func()
 
 	writeMu           sync.Mutex
 	mu                sync.Mutex
 	pendingOfferID    string
-	generation        uint64
 	rtcCloseRequested bool
 	closed            bool
 }
 
 type gatewayClientMessage struct {
-	ID         string                 `json:"id"`
-	Type       string                 `json:"type"`
-	Capability string                 `json:"capability"`
-	Data       map[string]interface{} `json:"data"`
+	ID   string                 `json:"id"`
+	Type string                 `json:"type"`
+	Data map[string]interface{} `json:"data"`
 }
 
 func NewGateway(options GatewayOptions) *Gateway {
@@ -170,20 +164,13 @@ func (g *Gateway) serveConnection(connection *websocket.Conn, request *http.Requ
 		_ = connection.Close()
 		return
 	}
-	capability, err := randomCapability()
-	if err != nil {
-		control.Close()
-		g.reportError(err)
-		_ = connection.Close()
-		return
-	}
 	session := &gatewaySession{
 		gateway:     g,
 		connection:  connection,
 		context:     GatewaySessionContext{Request: request, Session: control},
-		capability:  capability,
 		unsubscribe: func() {},
 	}
+	session.unsubscribe = control.OnEvent(session.forwardEvent)
 	if g.options.OnSessionCreated != nil {
 		if err := g.options.OnSessionCreated(session.context); err != nil {
 			session.send("", "gateway.error", map[string]interface{}{"message": err.Error()})
@@ -191,18 +178,23 @@ func (g *Gateway) serveConnection(connection *websocket.Conn, request *http.Requ
 			return
 		}
 	}
-	session.unsubscribe = control.OnEvent(session.forwardEvent)
 	g.mu.Lock()
-	if g.shutdownReason != "" {
-		reason := g.shutdownReason
-		g.mu.Unlock()
-		session.close(reason)
+	shutdownReason := g.shutdownReason
+	session.mu.Lock()
+	closed := session.closed
+	if !closed && shutdownReason == "" {
+		g.active[session] = struct{}{}
+	}
+	session.mu.Unlock()
+	g.mu.Unlock()
+	if closed {
 		return
 	}
-	g.active[session] = struct{}{}
-	g.mu.Unlock()
+	if shutdownReason != "" {
+		session.close(shutdownReason)
+		return
+	}
 	if err := session.send("", "gateway.ready", map[string]interface{}{
-		"capability": capability,
 		"session": map[string]interface{}{
 			"sessionId":        bootstrap.SessionID,
 			"expiresAt":        bootstrap.ExpiresAt,
@@ -238,15 +230,9 @@ func (s *gatewaySession) handleMessage(raw []byte) error {
 	}
 	message.ID = strings.TrimSpace(message.ID)
 	message.Type = strings.TrimSpace(message.Type)
-	if message.ID == "" || message.Type == "" || message.Capability == "" || message.Data == nil {
-		err := errors.New("RTC gateway message requires id, type, capability, and object data")
+	if message.ID == "" || message.Type == "" || message.Data == nil {
+		err := errors.New("RTC gateway message requires id, type, and object data")
 		s.send(message.ID, "gateway.error", map[string]interface{}{"message": err.Error()})
-		return err
-	}
-	if !capabilityMatches(s.capability, message.Capability) {
-		err := errors.New("invalid RTC gateway capability")
-		s.send(message.ID, "gateway.error", map[string]interface{}{"message": err.Error()})
-		s.close("invalid_capability")
 		return err
 	}
 
@@ -283,36 +269,21 @@ func (s *gatewaySession) handleOffer(message gatewayClientMessage) error {
 	}
 	typeValue, _ := offerValue["type"].(string)
 	sdp, _ := offerValue["sdp"].(string)
-	generation, err := positiveGeneration(message.Data["generation"])
-	if err != nil {
-		return err
-	}
 	s.mu.Lock()
 	if s.pendingOfferID != "" {
 		s.mu.Unlock()
 		return errors.New("an RTC offer is already pending")
 	}
-	if generation <= s.generation {
-		s.mu.Unlock()
-		return fmt.Errorf("stale RTC offer generation: %d", generation)
-	}
 	s.pendingOfferID = message.ID
-	s.generation = generation
 	s.mu.Unlock()
-	return s.context.Session.SendOffer(RTCSessionDescription{Type: typeValue, SDP: sdp}, message.Data["restart"] == true)
+	return s.context.Session.SendOffer(
+		RTCSessionDescription{Type: typeValue, SDP: sdp},
+		message.Data["restart"] == true,
+		message.Data["generation"],
+	)
 }
 
 func (s *gatewaySession) handleCandidate(message gatewayClientMessage) error {
-	generation, err := positiveGeneration(message.Data["generation"])
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	current := s.generation
-	s.mu.Unlock()
-	if generation != current {
-		return fmt.Errorf("stale RTC candidate generation: %d", generation)
-	}
 	value, exists := message.Data["candidate"]
 	if !exists || value == nil {
 		s.context.Session.SendIceCandidate(nil)
@@ -340,23 +311,14 @@ func (s *gatewaySession) handleCandidate(message gatewayClientMessage) error {
 func (s *gatewaySession) forwardEvent(event WireEvent) {
 	s.mu.Lock()
 	requestID := ""
-	if event.Type == EventRTCAnswer || event.Type == EventError {
+	if event.Type == EventRTCAnswer || event.Type == EventRTCSignalingError {
 		requestID = s.pendingOfferID
 		s.pendingOfferID = ""
 	}
-	generation := s.generation
 	s.mu.Unlock()
 	data := event.Data
 	if data == nil {
 		data = map[string]interface{}{}
-	}
-	if event.Type == EventRTCIceCandidate {
-		copy := make(map[string]interface{}, len(data)+1)
-		for key, value := range data {
-			copy[key] = value
-		}
-		copy["generation"] = generation
-		data = copy
 	}
 	if err := s.send(requestID, event.Type, data); err != nil {
 		s.gateway.reportError(err)
@@ -435,29 +397,6 @@ func gatewayRequestPath(request *http.Request) string {
 		return "/"
 	}
 	return path
-}
-
-func randomCapability() (string, error) {
-	value := make([]byte, 32)
-	if _, err := rand.Read(value); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(value), nil
-}
-
-func capabilityMatches(expected, received string) bool {
-	if len(expected) != len(received) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(received)) == 1
-}
-
-func positiveGeneration(value interface{}) (uint64, error) {
-	generation, ok := value.(float64)
-	if !ok || generation < 1 || generation != float64(uint64(generation)) {
-		return 0, errors.New("RTC signaling requires a positive negotiation generation")
-	}
-	return uint64(generation), nil
 }
 
 func optionalString(value interface{}) *string {

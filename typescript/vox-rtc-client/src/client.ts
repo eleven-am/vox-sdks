@@ -10,14 +10,13 @@ import type {
   VoxRtcBrowserSessionBootstrap,
   VoxRtcBrowserState,
   VoxRtcAudioDuckingOptions,
-  VoxRtcAudioDuckingMode,
   VoxRtcControlEventLike,
   VoxRtcClientEventEnvelope,
   VoxRtcSignalingEvent,
   WebSocketFactory,
 } from "./types.js";
 import { GatewaySignalingClient } from "./signaling.js";
-import { parseVoxSessionError, voxGenerationId } from "./errors.js";
+import { parseVoxSessionError, parseVoxSignalingError, voxGenerationId } from "./errors.js";
 import type { VoxRtcSessionError } from "./errors.js";
 
 type ListenerMap = {
@@ -25,27 +24,13 @@ type ListenerMap = {
 };
 
 type NormalizedAudioDuckingConfig = {
-  mode: VoxRtcAudioDuckingMode;
-  threshold: number;
   duckVolume: number;
-  sustainedVolume: number;
-  sustainedAfterMs: number;
-  localHoldMs: number;
   releaseDelayMs: number;
-  pollIntervalMs: number;
 };
 
-type AudioContextConstructor = typeof AudioContext;
-
 const DEFAULT_AUDIO_DUCKING_CONFIG: NormalizedAudioDuckingConfig = {
-  mode: "vox",
-  threshold: 0.035,
   duckVolume: 0.2,
-  sustainedVolume: 0.05,
-  sustainedAfterMs: 700,
-  localHoldMs: 500,
   releaseDelayMs: 350,
-  pollIntervalMs: 50,
 };
 
 const DUCKING_VOX_START_EVENTS = new Set([
@@ -95,58 +80,15 @@ function normalizeAudioDuckingConfig(
   if (value.enabled === false) {
     return null;
   }
-  const mode = value.mode === "local" || value.mode === "hybrid" ? value.mode : "vox";
   return {
-    mode,
-    threshold: clampNumber(value.threshold, DEFAULT_AUDIO_DUCKING_CONFIG.threshold, 0, 1),
     duckVolume: clampNumber(value.duckVolume, DEFAULT_AUDIO_DUCKING_CONFIG.duckVolume, 0, 1),
-    sustainedVolume: clampNumber(
-      value.sustainedVolume,
-      DEFAULT_AUDIO_DUCKING_CONFIG.sustainedVolume,
-      0,
-      1,
-    ),
-    sustainedAfterMs: clampNumber(
-      value.sustainedAfterMs,
-      DEFAULT_AUDIO_DUCKING_CONFIG.sustainedAfterMs,
-      0,
-      60_000,
-    ),
-    localHoldMs: clampNumber(
-      value.localHoldMs,
-      DEFAULT_AUDIO_DUCKING_CONFIG.localHoldMs,
-      0,
-      60_000,
-    ),
     releaseDelayMs: clampNumber(
       value.releaseDelayMs,
       DEFAULT_AUDIO_DUCKING_CONFIG.releaseDelayMs,
       0,
       60_000,
     ),
-    pollIntervalMs: clampNumber(
-      value.pollIntervalMs,
-      DEFAULT_AUDIO_DUCKING_CONFIG.pollIntervalMs,
-      16,
-      1_000,
-    ),
   };
-}
-
-function getAudioContextConstructor(): AudioContextConstructor | undefined {
-  return (
-    globalThis as typeof globalThis & {
-      webkitAudioContext?: AudioContextConstructor;
-    }
-  ).AudioContext ?? (
-    globalThis as typeof globalThis & {
-      webkitAudioContext?: AudioContextConstructor;
-    }
-  ).webkitAudioContext;
-}
-
-function nowMs(): number {
-  return globalThis.performance?.now?.() ?? Date.now();
 }
 
 function eventTypeFromControlEvent(event: VoxRtcControlEventLike): string {
@@ -233,18 +175,8 @@ export class VoxRtcBrowserClient {
   #bufferLocalCandidates = false;
   #negotiating = false;
   #awaitingRemoteDescription = false;
-  #audioDuckingContext: AudioContext | null = null;
-  #audioDuckingSource: MediaStreamAudioSourceNode | null = null;
-  #audioDuckingAnalyser: AnalyserNode | null = null;
-  #audioDuckingBuffer: Uint8Array<ArrayBuffer> | null = null;
-  #audioDuckingTimer: ReturnType<typeof setInterval> | null = null;
   #audioDuckingReleaseTimer: ReturnType<typeof setTimeout> | null = null;
   #audioDuckingBaseVolume: number | null = null;
-  #audioDuckingStartedAt: number | null = null;
-  #audioDuckingLocalActive = false;
-  #audioDuckingLocalStartedAt: number | null = null;
-  #audioDuckingLocalLastVoiceAt: number | null = null;
-  #audioDuckingLocalSuppressed = false;
   #audioDuckingVoxActive = false;
 
   constructor(options: VoxRtcBrowserClientOptions) {
@@ -337,7 +269,6 @@ export class VoxRtcBrowserClient {
         for (const track of localStream.getAudioTracks()) {
           pc.addTrack(track, localStream);
         }
-        this.#startLocalAudioDucking(localStream);
         this.#emit("localStream", localStream);
       }
 
@@ -384,8 +315,6 @@ export class VoxRtcBrowserClient {
     }
     this.#localStream?.getTracks().forEach((track) => track.stop());
     this.#localStream = nextStream;
-    this.#stopAudioDucking({ restoreVolume: true });
-    this.#startLocalAudioDucking(nextStream);
     this.#emit("localStream", nextStream);
     return nextStream;
   }
@@ -415,10 +344,6 @@ export class VoxRtcBrowserClient {
       event: envelope.event,
       payload: Object.prototype.hasOwnProperty.call(envelope, "payload") ? envelope.payload : null,
     }));
-  }
-
-  handleControlEvent(event: VoxRtcControlEventLike): void {
-    this.#handleAudioDuckingControlEvent(event);
   }
 
   #bindPeerConnection(pc: RTCPeerConnection): void {
@@ -474,10 +399,12 @@ export class VoxRtcBrowserClient {
 
   #handleSignalingEvent(event: VoxRtcSignalingEvent): void {
     this.#emit("signalingMessage", event);
-    this.handleControlEvent({ type: event.type, data: event.data });
+    this.#handleAudioDuckingControlEvent({ type: event.type, data: event.data });
 
     if (event.type === "error") {
       this.#emit("sessionError", parseVoxSessionError(event.data));
+    } else if (event.type === "rtc.signaling_error") {
+      this.#emit("sessionError", parseVoxSignalingError(event.data));
     }
 
     if (event.type === "rtc.ice_candidate") {
@@ -597,122 +524,9 @@ export class VoxRtcBrowserClient {
     this.#setStatus("closed");
   }
 
-  #startLocalAudioDucking(stream: MediaStream): void {
-    if (!this.#audioDuckingConfig || !this.#audioElement || !this.#usesLocalAudioDucking()) {
-      return;
-    }
-    this.#stopAudioDucking({ restoreVolume: true });
-    const AudioContextClass = getAudioContextConstructor();
-    if (!AudioContextClass) {
-      this.#emit("error", new Error("Audio ducking requires AudioContext support"));
-      return;
-    }
-    try {
-      const context = new AudioContextClass();
-      const source = context.createMediaStreamSource(stream);
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.2;
-      source.connect(analyser);
-      this.#audioDuckingContext = context;
-      this.#audioDuckingSource = source;
-      this.#audioDuckingAnalyser = analyser;
-      this.#audioDuckingBuffer = new Uint8Array(analyser.fftSize);
-      if (context.state === "suspended") {
-        context.resume().catch(() => {});
-      }
-      this.#audioDuckingTimer = setInterval(
-        () => this.#updateAudioDucking(),
-        this.#audioDuckingConfig.pollIntervalMs,
-      );
-    } catch (error) {
-      this.#stopAudioDucking({ restoreVolume: true });
-      this.#emit("error", error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  #stopAudioDucking({ restoreVolume }: { restoreVolume: boolean }): void {
-    if (this.#audioDuckingTimer !== null) {
-      clearInterval(this.#audioDuckingTimer);
-      this.#audioDuckingTimer = null;
-    }
-    if (this.#audioDuckingReleaseTimer !== null) {
-      clearTimeout(this.#audioDuckingReleaseTimer);
-      this.#audioDuckingReleaseTimer = null;
-    }
-    try {
-      this.#audioDuckingSource?.disconnect();
-    } catch {}
-    try {
-      this.#audioDuckingAnalyser?.disconnect();
-    } catch {}
-    this.#audioDuckingContext?.close().catch(() => {});
-    this.#audioDuckingContext = null;
-    this.#audioDuckingSource = null;
-    this.#audioDuckingAnalyser = null;
-    this.#audioDuckingBuffer = null;
-    if (restoreVolume) {
-      this.#restoreDuckedVolume();
-    } else {
-      this.#resetAudioDuckingState();
-    }
-  }
-
-  #updateAudioDucking(): void {
-    const config = this.#audioDuckingConfig;
-    const analyser = this.#audioDuckingAnalyser;
-    const buffer = this.#audioDuckingBuffer;
-    const audioElement = this.#audioElement;
-    if (!config || !analyser || !buffer || !audioElement) {
-      return;
-    }
-
-    analyser.getByteTimeDomainData(buffer);
-    let sum = 0;
-    for (const value of buffer) {
-      const centered = (value - 128) / 128;
-      sum += centered * centered;
-    }
-    const rms = Math.sqrt(sum / buffer.length);
-    const time = nowMs();
-
-    if (rms >= config.threshold) {
-      if (this.#audioDuckingLocalSuppressed && !this.#audioDuckingVoxActive) {
-        return;
-      }
-      if (!this.#audioDuckingLocalActive) {
-        this.#audioDuckingLocalActive = true;
-        this.#audioDuckingLocalStartedAt = time;
-      }
-      this.#audioDuckingLocalLastVoiceAt = time;
-      this.#beginAudioDucking();
-      if (
-        config.mode === "hybrid"
-        && !this.#audioDuckingVoxActive
-        && this.#audioDuckingLocalStartedAt !== null
-        && time - this.#audioDuckingLocalStartedAt >= config.localHoldMs
-      ) {
-        this.#audioDuckingLocalActive = false;
-        this.#audioDuckingLocalSuppressed = true;
-        this.#requestAudioDuckingRelease();
-      }
-      return;
-    }
-
-    this.#audioDuckingLocalSuppressed = false;
-    if (this.#audioDuckingLocalActive && this.#audioDuckingLocalLastVoiceAt !== null) {
-      if (time - this.#audioDuckingLocalLastVoiceAt >= config.releaseDelayMs) {
-        this.#audioDuckingLocalActive = false;
-        this.#audioDuckingLocalStartedAt = null;
-        this.#audioDuckingLocalLastVoiceAt = null;
-        this.#requestAudioDuckingRelease();
-      }
-    }
-  }
-
   #handleAudioDuckingControlEvent(event: VoxRtcControlEventLike): void {
     const config = this.#audioDuckingConfig;
-    if (!config || !this.#audioElement || !this.#usesVoxAudioDucking()) {
+    if (!config || !this.#audioElement) {
       return;
     }
 
@@ -720,7 +534,6 @@ export class VoxRtcBrowserClient {
     const payload = payloadFromControlEvent(event);
     if (DUCKING_VOX_START_EVENTS.has(type)) {
       this.#audioDuckingVoxActive = true;
-      this.#audioDuckingLocalSuppressed = false;
       this.#beginAudioDucking();
       return;
     }
@@ -741,14 +554,6 @@ export class VoxRtcBrowserClient {
     }
   }
 
-  #usesLocalAudioDucking(): boolean {
-    return this.#audioDuckingConfig?.mode === "local" || this.#audioDuckingConfig?.mode === "hybrid";
-  }
-
-  #usesVoxAudioDucking(): boolean {
-    return this.#audioDuckingConfig?.mode === "vox" || this.#audioDuckingConfig?.mode === "hybrid";
-  }
-
   #beginAudioDucking(): void {
     if (!this.#audioElement || !this.#audioDuckingConfig) {
       return;
@@ -757,16 +562,14 @@ export class VoxRtcBrowserClient {
       clearTimeout(this.#audioDuckingReleaseTimer);
       this.#audioDuckingReleaseTimer = null;
     }
-    if (this.#audioDuckingStartedAt === null) {
-      this.#audioDuckingStartedAt = nowMs();
+    if (this.#audioDuckingBaseVolume === null) {
       this.#audioDuckingBaseVolume = this.#audioElement.volume;
     }
-    const sustained = nowMs() - this.#audioDuckingStartedAt >= this.#audioDuckingConfig.sustainedAfterMs;
-    this.#setDuckedVolume(sustained ? this.#audioDuckingConfig.sustainedVolume : this.#audioDuckingConfig.duckVolume);
+    this.#setDuckedVolume(this.#audioDuckingConfig.duckVolume);
   }
 
   #requestAudioDuckingRelease(): void {
-    if (this.#audioDuckingLocalActive || this.#audioDuckingVoxActive) {
+    if (this.#audioDuckingVoxActive) {
       return;
     }
     const delay = this.#audioDuckingConfig?.releaseDelayMs ?? 0;
@@ -779,10 +582,18 @@ export class VoxRtcBrowserClient {
     }
     this.#audioDuckingReleaseTimer = setTimeout(() => {
       this.#audioDuckingReleaseTimer = null;
-      if (!this.#audioDuckingLocalActive && !this.#audioDuckingVoxActive) {
+      if (!this.#audioDuckingVoxActive) {
         this.#restoreDuckedVolume();
       }
     }, delay);
+  }
+
+  #stopAudioDucking(): void {
+    if (this.#audioDuckingReleaseTimer !== null) {
+      clearTimeout(this.#audioDuckingReleaseTimer);
+      this.#audioDuckingReleaseTimer = null;
+    }
+    this.#restoreDuckedVolume();
   }
 
   #setDuckedVolume(targetVolume: number): void {
@@ -802,16 +613,11 @@ export class VoxRtcBrowserClient {
 
   #resetAudioDuckingState(): void {
     this.#audioDuckingBaseVolume = null;
-    this.#audioDuckingStartedAt = null;
-    this.#audioDuckingLocalActive = false;
-    this.#audioDuckingLocalStartedAt = null;
-    this.#audioDuckingLocalLastVoiceAt = null;
-    this.#audioDuckingLocalSuppressed = false;
     this.#audioDuckingVoxActive = false;
   }
 
   #cleanup(): void {
-    this.#stopAudioDucking({ restoreVolume: true });
+    this.#stopAudioDucking();
     const signaling = this.#signaling;
     this.#signaling = null;
     signaling?.close("client_cleanup");

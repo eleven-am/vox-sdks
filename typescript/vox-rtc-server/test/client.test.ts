@@ -7,6 +7,7 @@ import {
   isVoxErrorCode,
   VOX_ERROR_CODES,
   VOX_START_ACK_TIMEOUT_CODE,
+  VoxRtcChannelJoinError,
   VoxRtcServerClient,
 } from "../src/index.js";
 
@@ -14,7 +15,7 @@ class FakeChannel {
   sent: Array<{ event: string; payload: Record<string, unknown> }> = [];
   state = ChannelState.IDLE;
   joinCalls = 0;
-  joinError: { message: string } | null = null;
+  joinError: { code?: string; message?: string; status?: number; details?: unknown } | null = null;
   stateHandlers = new Set<(state: ChannelState) => void>();
   messageHandlers = new Set<(event: string, payload: Record<string, unknown>) => void>();
 
@@ -229,6 +230,59 @@ test("attachSession includes the PondSocket decline reason", async () => {
   assert.equal(fakeSocket.channel.stateHandlers.size, 0);
 });
 
+test("attachSession preserves the structured PondSocket decline payload", async () => {
+  const fakeSocket = new FakeSocket();
+  fakeSocket.channel.join = () => {
+    fakeSocket.channel.joinCalls += 1;
+    fakeSocket.channel.joinError = {
+      code: "unauthorized",
+      message: "unknown or expired RTC session",
+      status: 403,
+      details: { reason: "expired" },
+    };
+    fakeSocket.channel.setState(ChannelState.DECLINED);
+  };
+  const client = new VoxRtcServerClient({
+    httpBase: "https://vox.example.com",
+    fetch,
+    socketFactory: () => fakeSocket as never,
+  });
+
+  const error = await client.attachSession("rtc_123").then(
+    () => {
+      throw new Error("join should have been declined");
+    },
+    (reason: unknown) => reason,
+  );
+
+  assert.ok(error instanceof VoxRtcChannelJoinError);
+  assert.equal(error.code, "unauthorized");
+  assert.equal(error.status, 403);
+  assert.deepEqual(error.details, { reason: "expired" });
+  assert.match(error.message, /DECLINED: unknown or expired RTC session/);
+});
+
+test("onConnectionChange delegates connection-state subscriptions to the socket", async () => {
+  const fakeSocket = new FakeSocket();
+  const client = new VoxRtcServerClient({
+    httpBase: "https://vox.example.com",
+    fetch,
+    socketFactory: () => fakeSocket as never,
+  });
+  await client.attachSession("rtc_123");
+
+  const states: ConnectionState[] = [];
+  const off = client.onConnectionChange((state) => states.push(state));
+  fakeSocket.disconnect();
+  fakeSocket.connect();
+  off();
+
+  assert.deepEqual(states, [
+    ConnectionState.DISCONNECTED,
+    ConnectionState.CONNECTED,
+  ]);
+});
+
 test("onEvent maps PondSocket messages into Vox wire events", async () => {
   const fakeSocket = new FakeSocket();
   const client = new VoxRtcServerClient({
@@ -328,6 +382,8 @@ test("named event hooks map common Vox events", async () => {
     endMs: 20,
     eouProbability: 0.7,
     topics: ["hello"],
+    entities: undefined,
+    words: undefined,
   }]);
   assert.deepEqual(turns, [{
     sessionId: "rtc_123",
@@ -498,6 +554,90 @@ test("onError defaults missing recoverable to true for old servers", async () =>
   assert.equal(events[0]?.generationId, undefined);
 });
 
+test("onSignalingError surfaces the terminal rtc.signaling_error frame vox sends", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: unknown[] = [];
+  const off = session.onSignalingError((event) => events.push(event));
+
+  fakeSocket.channel.emit("rtc.signaling_error", {
+    message: "failed to apply local description",
+    generation: 2,
+    session_id: "rtc_123",
+  });
+  off();
+
+  assert.deepEqual(events, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      message: "failed to apply local description",
+      generation: 2,
+      session_id: "rtc_123",
+    },
+    message: "failed to apply local description",
+    generation: 2,
+  }]);
+});
+
+test("onTranscript maps entities and words when the server supplies them", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: unknown[] = [];
+  const off = session.onTranscript((event) => events.push(event));
+
+  fakeSocket.channel.emit("conversation.item.input_audio_transcription.completed", {
+    transcript: "call alice at noon",
+    entities: [
+      { type: "person", text: "alice", start_char: 5, end_char: 10 },
+      { type: "time", text: "noon", start_char: 14, end_char: 18 },
+    ],
+    words: [
+      { word: "call", start_ms: 0, end_ms: 100, confidence: 0.9 },
+      { word: "alice", start_ms: 100, end_ms: 250 },
+    ],
+    session_id: "rtc_123",
+  });
+  off();
+
+  const [event] = events as Array<{ entities?: unknown; words?: unknown }>;
+  assert.deepEqual(event?.entities, [
+    { type: "person", text: "alice", startChar: 5, endChar: 10 },
+    { type: "time", text: "noon", startChar: 14, endChar: 18 },
+  ]);
+  assert.deepEqual(event?.words, [
+    { word: "call", startMs: 0, endMs: 100, confidence: 0.9 },
+    { word: "alice", startMs: 100, endMs: 250, confidence: undefined },
+  ]);
+});
+
+test("interruption events map the confirmation/rejection reason", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const detected: unknown[] = [];
+  const rejected: unknown[] = [];
+  const offDetected = session.onInterruptionDetected((event) => detected.push(event));
+  const offRejected = session.onInterruptionFalsePositive((event) => rejected.push(event));
+
+  fakeSocket.channel.emit("interruption.detected", {
+    response_id: "resp_1",
+    generation_id: "gen-7",
+    vad_active_ms: 300,
+    partial_transcript: "wait",
+    reason: "stable_partial",
+    session_id: "rtc_123",
+  });
+  fakeSocket.channel.emit("interruption.false_positive", {
+    response_id: "resp_1",
+    generation_id: "gen-7",
+    vad_active_ms: 120,
+    reason: "self_echo_transcript",
+    session_id: "rtc_123",
+  });
+  offDetected();
+  offRejected();
+
+  assert.equal((detected[0] as { reason?: string }).reason, "stable_partial");
+  assert.equal((rejected[0] as { reason?: string }).reason, "self_echo_transcript");
+});
+
 test("known error codes are exported and recognized", () => {
   assert.deepEqual([...VOX_ERROR_CODES], [
     "response_rejected_turn_state",
@@ -531,15 +671,13 @@ test("response commands thread an explicit generation id", async () => {
   ]);
 });
 
-test("sendTextResponse threads the generation id through start, delta, and commit", async () => {
+test("sendTextResponse replaces the active response text with one command", async () => {
   const { fakeSocket, session } = await attachedSession();
 
-  session.sendTextResponse("Hi", { cancelFirst: false, generationId: "gen-3" });
+  session.sendTextResponse("Hi", { generationId: "gen-3" });
 
   assert.deepEqual(fakeSocket.channel.sent, [
-    { event: "response.start", payload: { generation_id: "gen-3" } },
-    { event: "response.delta", payload: { delta: "Hi", generation_id: "gen-3" } },
-    { event: "response.commit", payload: { generation_id: "gen-3" } },
+    { event: "response.replace_text", payload: { text: "Hi", generation_id: "gen-3" } },
   ]);
 });
 
@@ -602,6 +740,7 @@ test("response lifecycle events expose the generation id when present", async ()
     generationId: "gen-7",
     vadActiveMs: 300,
     partialTranscript: "wait",
+    reason: undefined,
   }]);
 });
 

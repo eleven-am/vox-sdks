@@ -35,7 +35,6 @@ class FakeChannel:
             str, list[Callable[[FakeServerMessage], None]]
         ] = {}
         self.join_state: ChannelState = ChannelState.JOINED
-        self.join_error: str = ""
 
     def join(self) -> None:
         for handler in list(self.state_handlers):
@@ -229,10 +228,9 @@ def test_streaming_response_commands_share_one_generation_id() -> None:
     assert fake_socket.channel.sent[2][1]["generation_id"] == generation_id
 
 
-def test_attach_session_reports_join_decline_reason() -> None:
+def test_attach_session_reports_declined_channel_state() -> None:
     fake_socket = FakeSocket()
     fake_socket.channel.join_state = ChannelState.DECLINED
-    fake_socket.channel.join_error = "unknown or expired RTC session"
     client = VoxRtcServerClient(
         http_base="https://vox.example.com",
         socket_factory=lambda *args: fake_socket,
@@ -241,10 +239,7 @@ def test_attach_session_reports_join_decline_reason() -> None:
     try:
         asyncio.run(client.attach_session("rtc_123"))
     except RuntimeError as exc:
-        assert str(exc) == (
-            "RTC channel join failed for /rtc/rtc_123: DECLINED: "
-            "unknown or expired RTC session"
-        )
+        assert str(exc) == "RTC channel join failed for /rtc/rtc_123: DECLINED"
     else:
         raise AssertionError("expected attach_session to fail")
 
@@ -700,6 +695,169 @@ def test_start_response_and_wait_times_out_without_ack() -> None:
     assert fake_socket.channel.sent[0][0] == "response.start"
     assert fake_socket.channel.message_event_handlers.get("response.created") == []
     assert fake_socket.channel.message_event_handlers.get("error") == []
+
+
+def test_on_session_attached_exposes_provider() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    events: list[Any] = []
+    unsubscribe = session.on_session_attached(events.append)
+
+    fake_socket.channel.emit(
+        "rtc.session.attached",
+        {"session_id": "rtc_123", "provider": "pondsocket"},
+    )
+    unsubscribe()
+
+    assert len(events) == 1
+    assert events[0].provider == "pondsocket"
+    assert events[0].session_id == "rtc_123"
+    assert events[0].channel_name == "/rtc/rtc_123"
+
+
+def test_on_transcript_maps_entities_and_words() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    transcripts: list[Any] = []
+    unsubscribe = session.on_transcript(transcripts.append)
+
+    fake_socket.channel.emit(
+        "conversation.item.input_audio_transcription.completed",
+        {
+            "transcript": "call Alice at noon",
+            "language": "en",
+            "entities": [
+                {"type": "PERSON", "text": "Alice", "start_char": 5, "end_char": 10},
+            ],
+            "words": [
+                {"word": "call", "start_ms": 0, "end_ms": 200, "confidence": 0.98},
+                {"word": "Alice", "start_ms": 200, "end_ms": 500},
+            ],
+            "session_id": "rtc_123",
+        },
+    )
+    unsubscribe()
+
+    assert len(transcripts) == 1
+    entities = transcripts[0].entities
+    assert entities is not None
+    assert len(entities) == 1
+    assert entities[0].type == "PERSON"
+    assert entities[0].text == "Alice"
+    assert entities[0].start_char == 5
+    assert entities[0].end_char == 10
+    words = transcripts[0].words
+    assert words is not None
+    assert [word.word for word in words] == ["call", "Alice"]
+    assert words[0].start_ms == 0
+    assert words[0].end_ms == 200
+    assert words[0].confidence == 0.98
+    assert words[1].confidence is None
+
+
+def test_on_transcript_without_entities_or_words_leaves_them_none() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    transcripts: list[Any] = []
+    unsubscribe = session.on_transcript(transcripts.append)
+
+    fake_socket.channel.emit(
+        "conversation.item.input_audio_transcription.completed",
+        {"transcript": "hello", "session_id": "rtc_123"},
+    )
+    unsubscribe()
+
+    assert len(transcripts) == 1
+    assert transcripts[0].entities is None
+    assert transcripts[0].words is None
+
+
+def test_interruption_events_expose_reason() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    detected: list[Any] = []
+    false_positives: list[Any] = []
+    unsub_detected = session.on_interruption_detected(detected.append)
+    unsub_false = session.on_interruption_false_positive(false_positives.append)
+
+    fake_socket.channel.emit(
+        "interruption.detected",
+        {
+            "response_id": "resp_1",
+            "vad_active_ms": 300,
+            "reason": "supported_final_transcript",
+            "session_id": "rtc_123",
+        },
+    )
+    fake_socket.channel.emit(
+        "interruption.false_positive",
+        {
+            "response_id": "resp_1",
+            "vad_active_ms": 120,
+            "reason": "self_echo_transcript",
+            "session_id": "rtc_123",
+        },
+    )
+    unsub_detected()
+    unsub_false()
+
+    assert len(detected) == 1
+    assert detected[0].reason == "supported_final_transcript"
+    assert len(false_positives) == 1
+    assert false_positives[0].reason == "self_echo_transcript"
+
+
+def test_on_signaling_error_parses_server_wire_fields() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    errors: list[Any] = []
+    unsubscribe = session.on_signaling_error(errors.append)
+
+    fake_socket.channel.emit(
+        "rtc.signaling_error",
+        {
+            "message": "setLocalDescription failed",
+            "generation": 3,
+            "session_id": "rtc_123",
+        },
+    )
+    unsubscribe()
+
+    assert len(errors) == 1
+    assert errors[0].message == "setLocalDescription failed"
+    assert errors[0].generation == 3
+    assert errors[0].session_id == "rtc_123"
+    assert errors[0].channel_name == "/rtc/rtc_123"
+    assert not hasattr(errors[0], "recoverable")
+    assert not hasattr(errors[0], "code")
+
+
+def test_on_signaling_error_tolerates_missing_generation() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    errors: list[Any] = []
+    unsubscribe = session.on_signaling_error(errors.append)
+
+    fake_socket.channel.emit(
+        "rtc.signaling_error",
+        {"message": "RTC signaling failed", "session_id": "rtc_123"},
+    )
+    unsubscribe()
+
+    assert len(errors) == 1
+    assert errors[0].message == "RTC signaling failed"
+    assert errors[0].generation is None
+
+
+def test_send_text_response_delegates_to_replace_text() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+
+    session.send_text_response("Hello", ResponseOptions(generation_id="gen-9"))
+
+    sent = fake_socket.channel.sent
+    assert [event for event, _payload in sent] == ["response.replace_text"]
+    assert sent[0][1] == {"generation_id": "gen-9", "text": "Hello"}
 
 
 def test_connection_state_tolerates_unknown_socket_state() -> None:

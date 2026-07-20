@@ -62,6 +62,20 @@ export interface VoxRtcSessionCreatedEvent {
   data: Record<string, unknown>;
 }
 
+export interface VoxRtcTranscriptEntity {
+  type: string;
+  text: string;
+  startChar?: number;
+  endChar?: number;
+}
+
+export interface VoxRtcTranscriptWord {
+  word: string;
+  startMs?: number;
+  endMs?: number;
+  confidence?: number;
+}
+
 export interface VoxRtcTranscriptEvent {
   sessionId: string;
   channelName: string;
@@ -71,6 +85,8 @@ export interface VoxRtcTranscriptEvent {
   endMs?: number;
   eouProbability?: number;
   topics?: string[];
+  entities?: VoxRtcTranscriptEntity[];
+  words?: VoxRtcTranscriptWord[];
   data: Record<string, unknown>;
 }
 
@@ -123,6 +139,7 @@ export interface VoxRtcResponseEvent {
 export interface VoxRtcInterruptionEvent extends VoxRtcResponseEvent {
   vadActiveMs?: number;
   partialTranscript?: string | null;
+  reason?: string;
 }
 
 export interface VoxRtcBrowserEvent {
@@ -171,6 +188,14 @@ export interface VoxRtcErrorEvent {
   data: Record<string, unknown>;
 }
 
+export interface VoxRtcSignalingErrorEvent {
+  sessionId: string;
+  channelName: string;
+  message?: string;
+  generation?: number;
+  data: Record<string, unknown>;
+}
+
 export interface VoxRtcResponseOptions {
   allowInterruptions?: boolean;
   generationId?: string;
@@ -190,6 +215,7 @@ export interface VoxRtcSessionOptions {
 
 export interface VoxRtcOfferOptions {
   restart?: boolean;
+  generation?: number;
 }
 
 export type Unsubscribe = () => void;
