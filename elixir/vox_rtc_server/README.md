@@ -20,7 +20,7 @@ Add the package to `mix.exs`:
 ```elixir
 def deps do
   [
-    {:vox_rtc_server, "~> 0.2.1"}
+    {:vox_rtc_server, "~> 0.2.2"}
   ]
 end
 ```
