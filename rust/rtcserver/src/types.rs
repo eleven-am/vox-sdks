@@ -76,6 +76,7 @@ pub struct SessionConfig {
     pub turn_profile: Option<String>,
     pub vad_backend: Option<String>,
     pub turn_detector: Option<String>,
+    pub speech_context: Option<bool>,
     pub extra: EventData,
 }
 
@@ -127,6 +128,7 @@ pub struct TranscriptEvent {
     pub topics: Option<Vec<String>>,
     pub entities: Vec<TranscriptEntity>,
     pub words: Vec<TranscriptWord>,
+    pub speech_context: Option<EventData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

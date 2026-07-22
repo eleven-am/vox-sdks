@@ -61,7 +61,8 @@ alias VoxRtcServer.{Client, Session, SessionConfig}
     stt_model: "parakeet-stt:tdt-0.6b-v3",
     tts_model: "kokoro-tts:v1.0",
     voice: "af_heart",
-    turn_profile: "browser_default"
+    turn_profile: "browser_default",
+    speech_context: true
   })
 ```
 
@@ -76,8 +77,12 @@ Elixir messages:
 receive do
   {:vox_rtc, ^session, %VoxRtcServer.Event{type: :transcript_completed} = event} ->
     transcript = event.payload.transcript
+    speech_context = event.payload.speech_context
 end
 ```
+
+Speech context is opt-in and final-only. The value is Vox's versioned prosody
+and dynamic audio-event object carried as a `google.protobuf.Struct`.
 
 An application can explicitly manage subscriptions:
 

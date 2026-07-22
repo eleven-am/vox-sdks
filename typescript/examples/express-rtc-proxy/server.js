@@ -35,10 +35,15 @@ const gateway = createVoxRtcGateway({
       turnProfile: process.env.VOX_TURN_PROFILE || "browser_default",
       vadBackend: process.env.VOX_VAD_BACKEND || "silero",
       turnDetector: process.env.VOX_TURN_DETECTOR || "livekit",
+      speechContext: process.env.VOX_SPEECH_CONTEXT === "true",
     });
 
     const unsubscribe = session.onTranscript((event) => {
       const transcript = event.transcript.trim();
+      console.log("RTC transcript", JSON.stringify({
+        transcript,
+        speechContext: event.speechContext,
+      }));
       if (transcript) {
         session.sendTextResponse(`I heard: ${transcript}`, {
           allowInterruptions: true,

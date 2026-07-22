@@ -37,8 +37,11 @@ const gateway = createVoxRtcGateway({
       ttsModel: "kokoro-tts:v1.0",
       voice: "af_heart",
       turnProfile: "browser_default",
+      speechContext: true,
     });
-    session.onTranscript((event) => console.log(event.transcript));
+    session.onTranscript((event) => {
+      console.log(event.transcript, event.speechContext);
+    });
   },
   onSessionClosed: async ({ request, session, reason }) => {
     await releaseCall(request, session.sessionId, reason);
@@ -98,6 +101,11 @@ session.sendClientEvent({
 
 `sendClientEvent` is server-to-browser. Browser-originated data-channel events
 arrive through `onBrowserEvent`.
+
+Set `speechContext: true` in the session configuration to analyze each final
+user turn for prosody and audio events. The optional result is exposed as
+`event.speechContext` on `onTranscript`; partial transcript events do not carry
+speech context.
 
 ## Generation correlation
 

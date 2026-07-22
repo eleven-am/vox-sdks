@@ -85,6 +85,7 @@ defmodule VoxRtcServer.SessionConfig do
     :vad_backend,
     :turn_detector,
     :turn_profile,
+    :speech_context,
     include_word_timestamps: false
   ]
 
@@ -98,6 +99,7 @@ defmodule VoxRtcServer.SessionConfig do
           vad_backend: String.t() | nil,
           turn_detector: String.t() | nil,
           turn_profile: String.t() | nil,
+          speech_context: boolean() | nil,
           include_word_timestamps: boolean()
         }
 end

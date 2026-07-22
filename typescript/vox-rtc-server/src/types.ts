@@ -34,6 +34,7 @@ export interface VoxRtcSessionConfig {
   turnProfile?: string;
   vadBackend?: string;
   turnDetector?: string;
+  speechContext?: boolean;
   [key: string]: unknown;
 }
 
@@ -87,6 +88,7 @@ export interface VoxRtcTranscriptEvent {
   topics?: string[];
   entities?: VoxRtcTranscriptEntity[];
   words?: VoxRtcTranscriptWord[];
+  speechContext?: Record<string, unknown>;
   data: Record<string, unknown>;
 }
 

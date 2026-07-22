@@ -189,6 +189,10 @@ impl VoxRtcControlSession {
                 topics: optional_string_vec(&payload, "topics"),
                 entities: transcript_entities(&payload),
                 words: transcript_words(&payload),
+                speech_context: payload
+                    .get("speech_context")
+                    .and_then(Value::as_object)
+                    .cloned(),
                 data: payload,
             });
         })
@@ -437,16 +441,11 @@ impl VoxRtcControlSession {
     }
 
     pub async fn configure(&self, config: SessionConfig) -> Result<()> {
-        let mut session = config.extra;
-        insert_opt(&mut session, "stt_model", config.stt_model);
-        insert_opt(&mut session, "tts_model", config.tts_model);
-        insert_opt(&mut session, "voice", config.voice);
-        insert_opt(&mut session, "turn_profile", config.turn_profile);
-        insert_opt(&mut session, "vad_backend", config.vad_backend);
-        insert_opt(&mut session, "turn_detector", config.turn_detector);
-
         let mut payload = EventData::new();
-        payload.insert("session".to_owned(), Value::Object(session));
+        payload.insert(
+            "session".to_owned(),
+            Value::Object(session_config_payload(config)),
+        );
         self.send_control("session.update", payload).await
     }
 
@@ -663,6 +662,20 @@ fn insert_opt(session: &mut EventData, key: &str, value: Option<String>) {
     }
 }
 
+fn session_config_payload(config: SessionConfig) -> EventData {
+    let mut session = config.extra;
+    insert_opt(&mut session, "stt_model", config.stt_model);
+    insert_opt(&mut session, "tts_model", config.tts_model);
+    insert_opt(&mut session, "voice", config.voice);
+    insert_opt(&mut session, "turn_profile", config.turn_profile);
+    insert_opt(&mut session, "vad_backend", config.vad_backend);
+    insert_opt(&mut session, "turn_detector", config.turn_detector);
+    if let Some(enabled) = config.speech_context {
+        session.insert("speech_context".to_owned(), Value::Bool(enabled));
+    }
+    session
+}
+
 fn response_options_payload(options: Option<ResponseOptions>) -> EventData {
     let mut payload = EventData::new();
     if let Some(options) = options
@@ -748,6 +761,15 @@ mod tests {
             next_message(Err(RecvError::Closed)),
             ControlFlow::Break(())
         ));
+    }
+
+    #[test]
+    fn session_config_serializes_explicit_false_speech_context() {
+        let payload = session_config_payload(SessionConfig {
+            speech_context: Some(false),
+            ..Default::default()
+        });
+        assert_eq!(payload.get("speech_context"), Some(&Value::Bool(false)));
     }
 
     #[tokio::test]
@@ -970,7 +992,8 @@ mod tests {
                     "words": [
                         { "word": "call", "start_ms": 0, "end_ms": 300 },
                         { "word": "Ada", "start_ms": 300, "end_ms": 600, "confidence": 0.91 }
-                    ]
+                    ],
+                    "speech_context": { "schema_version": 1, "status": "complete" }
                 })),
             ))
             .unwrap();
@@ -989,6 +1012,14 @@ mod tests {
         assert_eq!(event.words[0].start_ms, 0.0);
         assert_eq!(event.words[0].confidence, None);
         assert_eq!(event.words[1].confidence, Some(0.91));
+        assert_eq!(
+            event
+                .speech_context
+                .as_ref()
+                .and_then(|context| context.get("status"))
+                .and_then(Value::as_str),
+            Some("complete")
+        );
     }
 
     #[tokio::test]
@@ -1007,6 +1038,7 @@ mod tests {
         let event = recv(&mut rx).await;
         assert!(event.entities.is_empty());
         assert!(event.words.is_empty());
+        assert!(event.speech_context.is_none());
     }
 
     #[tokio::test]

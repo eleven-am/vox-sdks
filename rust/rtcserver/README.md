@@ -15,11 +15,16 @@ controlled.session.configure(SessionConfig {
     tts_model: Some("kokoro-tts:v1.0".into()),
     voice: Some("af_heart".into()),
     turn_profile: Some("browser_default".into()),
+    speech_context: Some(true),
     ..Default::default()
 }).await?;
 ```
 
 Pass the API key in `VoxRtcServerClientOptions` or set `VOX_API_KEY`.
+
+Speech context is opt-in and final-only. When enabled,
+`TranscriptEvent.speech_context` contains Vox's versioned prosody and dynamic
+audio-event object; otherwise it is `None`.
 
 ## Responses and generation correlation
 

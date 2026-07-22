@@ -237,6 +237,7 @@ const SESSION_CONFIG_KEY_MAP: Record<string, string> = {
   turnProfile: "turn_profile",
   vadBackend: "vad_backend",
   turnDetector: "turn_detector",
+  speechContext: "speech_context",
 };
 
 export class VoxRtcChannelJoinError extends Error {
@@ -427,6 +428,9 @@ export class VoxRtcControlSession {
         topics: optionalStringArray(payload.topics),
         entities: optionalEntities(payload.entities),
         words: optionalWords(payload.words),
+        speechContext: isObjectRecord(payload.speech_context)
+          ? payload.speech_context
+          : undefined,
       });
     });
   }

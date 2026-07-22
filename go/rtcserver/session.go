@@ -137,6 +137,7 @@ func (s *ControlSession) OnTranscript(handler func(TranscriptEvent)) func() {
 			Topics:         stringSliceValue(payload, "topics"),
 			Entities:       transcriptEntities(payload),
 			Words:          transcriptWords(payload),
+			SpeechContext:  mapValue(payload, "speech_context"),
 		})
 	})
 }
@@ -377,6 +378,9 @@ func (s *ControlSession) Configure(config SessionConfig) {
 	}
 	if config.TurnDetector != "" {
 		session["turn_detector"] = config.TurnDetector
+	}
+	if config.SpeechContext != nil {
+		session["speech_context"] = *config.SpeechContext
 	}
 	for key, value := range config.Extra {
 		session[key] = value

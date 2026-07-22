@@ -47,7 +47,8 @@ defmodule VoxRtcServer.ClientTest do
              Session.configure(session, %SessionConfig{
                stt_model: "parakeet-stt:tdt-0.6b-v3",
                tts_model: "kokoro-tts:v1.0",
-               voice: "af_heart"
+               voice: "af_heart",
+               speech_context: true
              })
 
     assert_receive {:control_sent, ^stream,
@@ -57,6 +58,7 @@ defmodule VoxRtcServer.ClientTest do
 
     assert update.stt_model == "parakeet-stt:tdt-0.6b-v3"
     assert update.tts_model == "kokoro-tts:v1.0"
+    assert update.speech_context
 
     assert :ok =
              Session.send_offer(

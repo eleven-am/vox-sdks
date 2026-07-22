@@ -26,13 +26,16 @@ async def main() -> None:
         api_key=os.environ.get("VOX_API_KEY"),
     )
     bootstrap, session = await client.create_controlled_session()
-    session.on_transcript(lambda event: print("user said:", event.transcript))
+    session.on_transcript(
+        lambda event: print("user said:", event.transcript, event.speech_context)
+    )
     session.on_browser_event(lambda event: print(event.event, event.payload))
     session.configure(SessionConfig(
         stt_model="parakeet-stt:tdt-0.6b-v3",
         tts_model="kokoro-tts:v1.0",
         voice="af_heart",
         turn_profile="browser_default",
+        speech_context=True,
     ))
     session.send_text_response("Hello from Python.")
     session.send_client_event(ClientEventEnvelope(event="render.ready", payload=True))
@@ -41,6 +44,10 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+Speech context is opt-in and final-only. When enabled, the final
+`TranscriptEvent.speech_context` contains Vox's versioned prosody and dynamic
+audio-event result; otherwise it is `None`.
 
 ## Acknowledged response starts
 

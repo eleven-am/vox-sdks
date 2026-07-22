@@ -191,6 +191,7 @@ defmodule Vox.TranscribeRequest do
   field(:temperature, 5, type: :float)
   field(:response_format, 6, type: :string, json_name: "responseFormat")
   field(:format_hint, 7, type: :string, json_name: "formatHint")
+  field(:speech_context, 8, type: :bool, json_name: "speechContext")
 end
 
 defmodule Vox.TranscribeResponse do
@@ -209,6 +210,7 @@ defmodule Vox.TranscribeResponse do
   field(:segments, 6, repeated: true, type: Vox.TranscriptSegment)
   field(:entities, 7, repeated: true, type: Vox.Entity)
   field(:topics, 8, repeated: true, type: :string)
+  field(:speech_context, 9, type: Google.Protobuf.Struct, json_name: "speechContext")
 end
 
 defmodule Vox.Entity do
@@ -337,6 +339,7 @@ defmodule Vox.StreamConfig do
   field(:partial_stride_ms, 6, type: :uint32, json_name: "partialStrideMs")
   field(:include_word_timestamps, 7, type: :bool, json_name: "includeWordTimestamps")
   field(:temperature, 8, type: :float)
+  field(:speech_context, 9, type: :bool, json_name: "speechContext")
 end
 
 defmodule Vox.AudioFrame do
@@ -435,6 +438,7 @@ defmodule Vox.StreamTranscriptResult do
   field(:topics, 10, repeated: true, type: :string)
   field(:words, 11, repeated: true, type: Vox.WordTimestamp)
   field(:segments, 12, repeated: true, type: Vox.TranscriptSegment)
+  field(:speech_context, 13, type: Google.Protobuf.Struct, json_name: "speechContext")
 end
 
 defmodule Vox.StreamErrorMessage do
@@ -1079,6 +1083,7 @@ defmodule Vox.ConversationSessionUpdate do
   field(:turn_detector, 8, type: :string, json_name: "turnDetector")
   field(:turn_profile, 9, type: :string, json_name: "turnProfile")
   field(:include_word_timestamps, 10, type: :bool, json_name: "includeWordTimestamps")
+  field(:speech_context, 11, type: :bool, json_name: "speechContext")
 end
 
 defmodule Vox.ConversationAudioAppend do
@@ -1231,6 +1236,7 @@ defmodule Vox.ConversationTranscriptDone do
   field(:entities, 6, repeated: true, type: Vox.Entity)
   field(:topics, 7, repeated: true, type: :string)
   field(:words, 8, repeated: true, type: Vox.WordTimestamp)
+  field(:speech_context, 9, type: Google.Protobuf.Struct, json_name: "speechContext")
 end
 
 defmodule Vox.ConversationResponseCreated do

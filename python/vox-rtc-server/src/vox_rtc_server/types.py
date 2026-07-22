@@ -48,6 +48,7 @@ class SessionConfig:
     turn_profile: str | None = None
     vad_backend: str | None = None
     turn_detector: str | None = None
+    speech_context: bool | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -116,6 +117,7 @@ class TranscriptEvent:
     topics: list[str] | None = None
     entities: list[TranscriptEntity] | None = None
     words: list[TranscriptWord] | None = None
+    speech_context: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

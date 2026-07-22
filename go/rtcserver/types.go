@@ -64,13 +64,14 @@ type RTCIceCandidate struct {
 }
 
 type SessionConfig struct {
-	STTModel     string                 `json:"-"`
-	TTSModel     string                 `json:"-"`
-	Voice        string                 `json:"-"`
-	TurnProfile  string                 `json:"-"`
-	VADBackend   string                 `json:"-"`
-	TurnDetector string                 `json:"-"`
-	Extra        map[string]interface{} `json:"-"`
+	STTModel      string                 `json:"-"`
+	TTSModel      string                 `json:"-"`
+	Voice         string                 `json:"-"`
+	TurnProfile   string                 `json:"-"`
+	VADBackend    string                 `json:"-"`
+	TurnDetector  string                 `json:"-"`
+	SpeechContext *bool                  `json:"-"`
+	Extra         map[string]interface{} `json:"-"`
 }
 
 type SessionOptions struct {
@@ -140,6 +141,7 @@ type TranscriptEvent struct {
 	Topics         []string
 	Entities       []TranscriptEntity
 	Words          []TranscriptWord
+	SpeechContext  map[string]interface{}
 }
 
 type TurnStateEvent struct {

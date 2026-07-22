@@ -275,6 +275,11 @@ class VoxRtcControlSession:
                     topics=_optional_str_list(payload.get("topics")),
                     entities=_parse_entities(payload.get("entities")),
                     words=_parse_words(payload.get("words")),
+                    speech_context=(
+                        dict(payload["speech_context"])
+                        if isinstance(payload.get("speech_context"), Mapping)
+                        else None
+                    ),
                 )
             )
 
@@ -501,6 +506,8 @@ class VoxRtcControlSession:
             session["vad_backend"] = config.vad_backend
         if config.turn_detector is not None:
             session["turn_detector"] = config.turn_detector
+        if config.speech_context is not None:
+            session["speech_context"] = config.speech_context
         self.send_control("session.update", {"session": session})
 
     def start_response(self, options: ResponseOptions | None = None) -> None:

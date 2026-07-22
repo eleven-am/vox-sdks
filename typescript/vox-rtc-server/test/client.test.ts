@@ -146,6 +146,7 @@ test("attachSession joins the RTC channel and sends the expected control message
     turnProfile: "browser_default",
     vadBackend: "silero",
     turnDetector: "livekit",
+    speechContext: true,
   });
   session.sendTextResponse("Hello");
   session.sendClientEvent({ event: "render.url", payload: { url: "https://example.com" } });
@@ -163,6 +164,7 @@ test("attachSession joins the RTC channel and sends the expected control message
       turn_profile: "browser_default",
       vad_backend: "silero",
       turn_detector: "livekit",
+      speech_context: true,
     },
   });
   assert.deepEqual(fakeSocket.channel.sent[1]?.payload, { text: "Hello" });
@@ -334,6 +336,7 @@ test("named event hooks map common Vox events", async () => {
     end_ms: 20,
     eou_probability: 0.7,
     topics: ["hello"],
+    speech_context: { schema_version: 1, status: "complete" },
     session_id: "rtc_123",
   });
   fakeSocket.channel.emit("turn.state_changed", {
@@ -374,6 +377,7 @@ test("named event hooks map common Vox events", async () => {
       end_ms: 20,
       eou_probability: 0.7,
       topics: ["hello"],
+      speech_context: { schema_version: 1, status: "complete" },
       session_id: "rtc_123",
     },
     transcript: "hello world",
@@ -384,6 +388,7 @@ test("named event hooks map common Vox events", async () => {
     topics: ["hello"],
     entities: undefined,
     words: undefined,
+    speechContext: { schema_version: 1, status: "complete" },
   }]);
   assert.deepEqual(turns, [{
     sessionId: "rtc_123",

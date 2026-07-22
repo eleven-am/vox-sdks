@@ -47,7 +47,8 @@ defmodule VoxRtcServer.Protocol do
       vad_backend: config.vad_backend || "",
       turn_detector: config.turn_detector || "",
       turn_profile: config.turn_profile || "",
-      include_word_timestamps: config.include_word_timestamps
+      include_word_timestamps: config.include_word_timestamps,
+      speech_context: config.speech_context || false
     }
 
     control(:session_update, update)

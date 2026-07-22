@@ -161,13 +161,15 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 		t.Fatalf("unexpected join timeout: %s", session.joinTimeout)
 	}
 
+	speechContext := true
 	session.Configure(SessionConfig{
-		STTModel:     "stt",
-		TTSModel:     "tts",
-		Voice:        "voice",
-		TurnProfile:  "browser_default",
-		VADBackend:   "silero",
-		TurnDetector: "livekit",
+		STTModel:      "stt",
+		TTSModel:      "tts",
+		Voice:         "voice",
+		TurnProfile:   "browser_default",
+		VADBackend:    "silero",
+		TurnDetector:  "livekit",
+		SpeechContext: &speechContext,
 	})
 	session.SendTextResponse("hello", nil, true)
 	session.SendClientEvent(ClientEvent{Event: "render.url", Payload: map[string]interface{}{"url": "https://example.com"}})
@@ -177,6 +179,10 @@ func TestAttachSessionAndSendMessages(t *testing.T) {
 	}
 	if fake.channel.sent[0].event != "session.update" {
 		t.Fatalf("unexpected first event: %s", fake.channel.sent[0].event)
+	}
+	sessionPayload, ok := fake.channel.sent[0].payload["session"].(map[string]interface{})
+	if !ok || sessionPayload["speech_context"] != true {
+		t.Fatalf("unexpected session payload: %#v", fake.channel.sent[0].payload)
 	}
 	if fake.channel.sent[1].event != "response.replace_text" {
 		t.Fatalf("unexpected response event: %s", fake.channel.sent[1].event)
@@ -372,6 +378,7 @@ func TestNamedEventHooks(t *testing.T) {
 		"end_ms":          20,
 		"eou_probability": 0.7,
 		"topics":          []interface{}{"hello"},
+		"speech_context":  map[string]interface{}{"schema_version": 1, "status": "complete"},
 		"session_id":      "rtc_123",
 	})
 	fake.channel.emit(EventTurnStateChanged, map[string]interface{}{
@@ -404,6 +411,9 @@ func TestNamedEventHooks(t *testing.T) {
 	}
 	if len(transcript.Topics) != 1 || transcript.Topics[0] != "hello" {
 		t.Fatalf("unexpected topics: %#v", transcript.Topics)
+	}
+	if transcript.SpeechContext["status"] != "complete" {
+		t.Fatalf("unexpected speech context: %#v", transcript.SpeechContext)
 	}
 	if turn.State != "speaking" || turn.PreviousState != "idle" {
 		t.Fatalf("unexpected turn event: %#v", turn)

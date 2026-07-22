@@ -52,13 +52,15 @@ bootstrap, session, err := client.CreateControlledSession(context.Background())
 if err != nil { log.Fatal(err) }
 
 session.OnTranscript(func(event rtcserver.TranscriptEvent) {
-	log.Printf("user said: %s", event.Transcript)
+	log.Printf("user said: %s context=%v", event.Transcript, event.SpeechContext)
 })
+speechContext := true
 session.Configure(rtcserver.SessionConfig{
 	STTModel: "parakeet-stt:tdt-0.6b-v3",
 	TTSModel: "kokoro-tts:v1.0",
 	Voice: "af_heart",
 	TurnProfile: "browser_default",
+	SpeechContext: &speechContext,
 })
 log.Printf("session: %s", bootstrap.SessionID)
 ```
@@ -133,3 +135,8 @@ session.OnSignalingError(func(event rtcserver.SignalingErrorEvent) {
 (`Word`, `StartMS`, `EndMS`, optional `Confidence`) alongside the transcript
 text. Both interruption callbacks (`OnInterruptionDetected`,
 `OnInterruptionFalsePositive`) carry the server's `Reason` slug.
+
+`SpeechContext` is populated only on final transcript events when the session
+configuration explicitly enables it. It contains Vox's versioned prosody and
+dynamic audio-event object. The pointer configuration preserves the difference
+between omitted and explicitly disabled.

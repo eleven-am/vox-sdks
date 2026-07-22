@@ -180,6 +180,7 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
             turn_profile="browser_default",
             vad_backend="silero",
             turn_detector="livekit",
+            speech_context=True,
         )
     )
     session.send_text_response("Hello")
@@ -203,6 +204,7 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
             "turn_profile": "browser_default",
             "vad_backend": "silero",
             "turn_detector": "livekit",
+            "speech_context": True,
         }
     }
     assert fake_socket.channel.sent[1][1] == {"text": "Hello"}
@@ -304,6 +306,7 @@ def test_named_event_hooks_map_common_vox_events() -> None:
             "end_ms": 20,
             "eou_probability": 0.7,
             "topics": ["hello"],
+            "speech_context": {"schema_version": 1, "status": "complete"},
             "session_id": "rtc_123",
         },
     )
@@ -347,6 +350,10 @@ def test_named_event_hooks_map_common_vox_events() -> None:
     assert transcripts[0].end_ms == 20
     assert transcripts[0].eou_probability == 0.7
     assert transcripts[0].topics == ["hello"]
+    assert transcripts[0].speech_context == {
+        "schema_version": 1,
+        "status": "complete",
+    }
     assert transcripts[0].session_id == "rtc_123"
     assert transcripts[0].channel_name == "/rtc/rtc_123"
 
