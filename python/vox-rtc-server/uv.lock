@@ -409,7 +409,7 @@ wheels = [
 
 [[package]]
 name = "vox-rtc-server"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "pondsocket-client" },
