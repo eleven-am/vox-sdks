@@ -81,8 +81,21 @@ correlates the `response.created` event (or the typed `error`) with the
 `generation_id` it sent:
 
 ```python
-ack = await session.start_response_and_wait()
+from vox_rtc_server import ResponseOptions, ResponseOutputOptions
+
+ack = await session.start_response_and_wait(
+    ResponseOptions(
+        output=ResponseOutputOptions(
+            model="qwen3-tts:0.6b-clone",
+            voice="samantha",
+            language="fr",
+            speed=0.9,
+            params={"temperature": 0.7},
+        )
+    )
+)
 if ack.accepted:
+    print("effective output:", ack.output)
     session.append_response_text("Hello.")
     session.commit_response()
 else:
@@ -92,6 +105,9 @@ else:
 You can also thread your own generation id through every response command via
 `ResponseOptions(generation_id="gen-42")`; response lifecycle events
 (`ResponseEvent`, `InterruptionEvent`) expose the echoed `generation_id`.
+The response-scoped `output` is optional. Vox fills omitted fields from the
+session configuration and echoes the immutable effective selection on the
+acknowledgement and `ResponseEvent`.
 
 ## Error handling
 

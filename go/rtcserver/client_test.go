@@ -953,6 +953,64 @@ func TestStartResponseAndWaitAccepted(t *testing.T) {
 	}
 }
 
+func TestStartResponseAndWaitSendsAndReturnsResponseOutput(t *testing.T) {
+	fake, session := newAttachedSession(t)
+	speed := 0.9
+	options := &ResponseOptions{
+		GenerationID: "gen-output",
+		Output: &ResponseOutputOptions{
+			Model:    "qwen3-tts:0.6b-clone",
+			Voice:    "samantha",
+			Language: "fr",
+			Speed:    &speed,
+			Params:   map[string]interface{}{"temperature": 0.7},
+		},
+	}
+
+	type result struct {
+		ack StartAck
+		err error
+	}
+	results := make(chan result, 1)
+	go func() {
+		ack, err := session.StartResponseAndWait(context.Background(), options)
+		results <- result{ack: ack, err: err}
+	}()
+
+	payload := awaitStartPayload(t, fake)
+	output, ok := payload["output"].(map[string]interface{})
+	if !ok || output["model"] != "qwen3-tts:0.6b-clone" || output["voice"] != "samantha" {
+		t.Fatalf("unexpected response output payload: %#v", payload)
+	}
+	fake.channel.emit(EventResponseCreated, map[string]interface{}{
+		"response_id":   "resp-output",
+		"generation_id": "gen-output",
+		"session_id":    "rtc_123",
+		"output": map[string]interface{}{
+			"model":    "qwen3-tts:0.6b-clone",
+			"voice":    "samantha",
+			"language": "fr",
+			"speed":    0.9,
+			"params":   map[string]interface{}{"temperature": 0.7},
+		},
+	})
+
+	outcome := <-results
+	if outcome.err != nil {
+		t.Fatalf("StartResponseAndWait returned error: %v", outcome.err)
+	}
+	if outcome.ack.Output == nil {
+		t.Fatalf("missing resolved response output: %#v", outcome.ack)
+	}
+	if outcome.ack.Output.Model != "qwen3-tts:0.6b-clone" ||
+		outcome.ack.Output.Voice != "samantha" ||
+		outcome.ack.Output.Language != "fr" ||
+		outcome.ack.Output.Speed != 0.9 ||
+		outcome.ack.Output.Params["temperature"] != 0.7 {
+		t.Fatalf("unexpected resolved response output: %#v", outcome.ack.Output)
+	}
+}
+
 func TestStartResponseAndWaitTypedRejection(t *testing.T) {
 	fake, session := newAttachedSession(t)
 

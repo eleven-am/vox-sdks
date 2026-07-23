@@ -84,6 +84,25 @@ pub struct SessionConfig {
 pub struct ResponseOptions {
     pub allow_interruptions: Option<bool>,
     pub generation_id: Option<String>,
+    pub output: Option<ResponseOutputOptions>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResponseOutputOptions {
+    pub model: Option<String>,
+    pub voice: Option<String>,
+    pub language: Option<String>,
+    pub speed: Option<f64>,
+    pub params: Option<EventData>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResponseOutput {
+    pub model: String,
+    pub voice: Option<String>,
+    pub language: String,
+    pub speed: f64,
+    pub params: EventData,
 }
 
 #[derive(Debug, Clone)]
@@ -304,6 +323,7 @@ pub struct ResponseEvent {
     pub data: EventData,
     pub response_id: Option<String>,
     pub generation_id: Option<String>,
+    pub output: Option<ResponseOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -359,6 +379,7 @@ pub struct StartAck {
     pub accepted: bool,
     pub generation_id: String,
     pub response_id: Option<String>,
+    pub output: Option<ResponseOutput>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub recoverable: bool,

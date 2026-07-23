@@ -151,12 +151,22 @@ browser and Vox; it does not pass through the Elixir application.
 Text can be appended incrementally as an LLM generates it:
 
 ```elixir
-alias VoxRtcServer.{ResponseOptions, Session}
+alias VoxRtcServer.{ResponseOptions, ResponseOutputOptions, Session}
 
-options = %ResponseOptions{allow_interruptions: true}
+options = %ResponseOptions{
+  allow_interruptions: true,
+  output: %ResponseOutputOptions{
+    model: "qwen3-tts:0.6b-clone",
+    voice: "samantha",
+    language: "fr",
+    speed: 0.9,
+    params: %{"temperature" => 0.7}
+  }
+}
 
 case Session.start_response_and_wait(session, options, 5_000) do
   {:ok, ack} ->
+    Logger.info("effective output", output: inspect(ack.output))
     response = %ResponseOptions{
       allow_interruptions: true,
       generation_id: ack.generation_id
@@ -181,6 +191,9 @@ The session automatically carries the active generation through subsequent
 delta, commit, and cancel commands, so passing the returned id explicitly is
 optional. Passing it explicitly is useful when application work is concurrent
 because Vox can reject stale work without affecting the current response.
+The response-scoped `output` is optional. Vox fills omitted fields from the
+session configuration and returns the immutable effective selection in the
+acknowledgement.
 
 `Session.start_response/2` remains available for fire-and-forget control. Use
 `cancel_response/2` to cancel an active response and

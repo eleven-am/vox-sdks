@@ -479,6 +479,7 @@ impl VoxRtcControlSession {
                                 accepted: true,
                                 generation_id: generation_id.clone(),
                                 response_id: optional_string(&data, "response_id"),
+                                output: response_output(&data),
                                 error_code: None,
                                 error_message: None,
                                 recoverable: true,
@@ -489,6 +490,7 @@ impl VoxRtcControlSession {
                                 accepted: false,
                                 generation_id: generation_id.clone(),
                                 response_id: optional_string(&data, "response_id"),
+                                output: None,
                                 error_code: optional_nonempty_string(&data, "code"),
                                 error_message: optional_string(&data, "message"),
                                 recoverable: recoverable_flag(&data),
@@ -679,10 +681,32 @@ fn session_config_payload(config: SessionConfig) -> EventData {
 
 fn response_options_payload(options: Option<ResponseOptions>) -> EventData {
     let mut payload = EventData::new();
-    if let Some(options) = options
-        && let Some(allow) = options.allow_interruptions
+    if let Some(options) = options {
+        if let Some(allow) = options.allow_interruptions {
+            payload.insert("allow_interruptions".to_owned(), Value::Bool(allow));
+        }
+        if let Some(output) = options.output {
+            payload.insert(
+                "output".to_owned(),
+                Value::Object(response_output_options_payload(output)),
+            );
+        }
+    }
+    payload
+}
+
+fn response_output_options_payload(output: ResponseOutputOptions) -> EventData {
+    let mut payload = EventData::new();
+    insert_opt(&mut payload, "model", output.model);
+    insert_opt(&mut payload, "voice", output.voice);
+    insert_opt(&mut payload, "language", output.language);
+    if let Some(speed) = output.speed
+        && let Some(number) = serde_json::Number::from_f64(speed)
     {
-        payload.insert("allow_interruptions".to_owned(), Value::Bool(allow));
+        payload.insert("speed".to_owned(), Value::Number(number));
+    }
+    if let Some(params) = output.params {
+        payload.insert("params".to_owned(), Value::Object(params));
     }
     payload
 }
@@ -695,13 +719,30 @@ fn explicit_generation(options: &Option<ResponseOptions>) -> Option<String> {
 }
 
 fn response_event(payload: EventData, session_id: &str, channel_name: &str) -> ResponseEvent {
+    let output = response_output(&payload);
     ResponseEvent {
         session_id: session_id.to_owned(),
         channel_name: channel_name.to_owned(),
         response_id: optional_string(&payload, "response_id"),
         generation_id: optional_nonempty_string(&payload, "generation_id"),
+        output,
         data: payload,
     }
+}
+
+fn response_output(payload: &EventData) -> Option<ResponseOutput> {
+    let output = payload.get("output")?.as_object()?;
+    let model = optional_nonempty_string(output, "model")?;
+    let language = optional_nonempty_string(output, "language")?;
+    let speed = optional_number(output, "speed")?;
+    let params = output.get("params")?.as_object()?.clone();
+    Some(ResponseOutput {
+        model,
+        voice: optional_nonempty_string(output, "voice"),
+        language,
+        speed,
+        params,
+    })
 }
 
 #[cfg(test)]
@@ -842,6 +883,7 @@ mod tests {
         let options = ResponseOptions {
             allow_interruptions: Some(false),
             generation_id: Some("gen-7".to_owned()),
+            ..Default::default()
         };
         let (generation_id, start) = session.start_payload(Some(options));
         assert_eq!(generation_id, "gen-7");
@@ -868,6 +910,35 @@ mod tests {
         assert_eq!(
             start.get("generation_id"),
             Some(&Value::String(generation_id))
+        );
+    }
+
+    #[tokio::test]
+    async fn start_payload_serializes_response_output() {
+        let (session, _) = session().await;
+        let options = ResponseOptions {
+            generation_id: Some("gen-output".to_owned()),
+            output: Some(ResponseOutputOptions {
+                model: Some("qwen3-tts:0.6b-clone".to_owned()),
+                voice: Some("samantha".to_owned()),
+                language: Some("fr".to_owned()),
+                speed: Some(0.9),
+                params: Some(payload(json!({ "temperature": 0.7 }))),
+            }),
+            ..Default::default()
+        };
+
+        let (_, start) = session.start_payload(Some(options));
+
+        assert_eq!(
+            start.get("output"),
+            Some(&json!({
+                "model": "qwen3-tts:0.6b-clone",
+                "voice": "samantha",
+                "language": "fr",
+                "speed": 0.9,
+                "params": { "temperature": 0.7 }
+            }))
         );
     }
 
@@ -1138,7 +1209,17 @@ mod tests {
             sender
                 .send((
                     EVENT_RESPONSE_CREATED.to_owned(),
-                    payload(json!({ "response_id": "resp-9", "generation_id": "gen-ack" })),
+                    payload(json!({
+                        "response_id": "resp-9",
+                        "generation_id": "gen-ack",
+                        "output": {
+                            "model": "qwen3-tts:0.6b-clone",
+                            "voice": "samantha",
+                            "language": "fr",
+                            "speed": 0.9,
+                            "params": { "temperature": 0.7 }
+                        }
+                    })),
                 ))
                 .unwrap();
         });
@@ -1149,6 +1230,16 @@ mod tests {
         assert!(ack.accepted);
         assert_eq!(ack.generation_id, "gen-ack");
         assert_eq!(ack.response_id.as_deref(), Some("resp-9"));
+        assert_eq!(
+            ack.output,
+            Some(ResponseOutput {
+                model: "qwen3-tts:0.6b-clone".to_owned(),
+                voice: Some("samantha".to_owned()),
+                language: "fr".to_owned(),
+                speed: 0.9,
+                params: payload(json!({ "temperature": 0.7 })),
+            })
+        );
         assert!(ack.recoverable);
         assert_eq!(ack.error_code, None);
     }

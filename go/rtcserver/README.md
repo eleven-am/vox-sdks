@@ -78,12 +78,22 @@ correlated `GenerationID` when the server knows it.
 Instead of fire-and-forget, gate delta pumping on the start acknowledgement:
 
 ```go
-ack, err := session.StartResponseAndWait(ctx, nil)
+speed := 0.9
+ack, err := session.StartResponseAndWait(ctx, &rtcserver.ResponseOptions{
+	Output: &rtcserver.ResponseOutputOptions{
+		Model: "qwen3-tts:0.6b-clone",
+		Voice: "samantha",
+		Language: "fr",
+		Speed: &speed,
+		Params: map[string]interface{}{"temperature": 0.7},
+	},
+})
 if err != nil { return err }
 if !ack.Accepted {
 	log.Printf("start rejected: %s (%s)", ack.Error.Code, ack.Error.Message)
 	return nil
 }
+log.Printf("effective output: %+v", ack.Output)
 session.AppendResponseText("Hello.", &rtcserver.ResponseOptions{GenerationID: ack.GenerationID})
 session.CommitResponse()
 ```
@@ -91,6 +101,9 @@ session.CommitResponse()
 `StartResponseAndWait` resolves with the correlated `response.created`
 (`Accepted: true`, plus `ResponseID`) or the correlated typed `error`
 (`Accepted: false`, plus `Error`), and fails only when `ctx` expires first.
+`Output` is optional. Vox fills omitted output fields from the session
+configuration and returns the immutable effective selection in `ack.Output`
+and `ResponseEvent.Output`.
 
 ## Error handling
 

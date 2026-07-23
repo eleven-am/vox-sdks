@@ -13,6 +13,8 @@ import type {
   VoxRtcOfferOptions,
   VoxRtcResponseEvent,
   VoxRtcResponseOptions,
+  VoxRtcResponseOutput,
+  VoxRtcResponseOutputOptions,
   VoxRtcSessionAttachedEvent,
   VoxRtcSessionConfig,
   VoxRtcSessionCreatedEvent,
@@ -263,11 +265,42 @@ function responseEvent(
   sessionId: string,
   channelName: string,
 ): VoxRtcResponseEvent {
+  const output = responseOutput(payload.output);
   return {
     ...baseEvent(payload, sessionId, channelName),
     responseId: optionalString(payload.response_id),
     generationId: optionalString(payload.generation_id),
+    ...(output === undefined ? {} : { output }),
   };
+}
+
+function responseOutput(value: unknown): VoxRtcResponseOutput | undefined {
+  if (!isObjectRecord(value)) return undefined;
+  const model = optionalString(value.model);
+  const language = optionalString(value.language);
+  const speed = optionalNumber(value.speed);
+  if (!model || !language || speed === undefined || !isObjectRecord(value.params)) {
+    return undefined;
+  }
+  return {
+    model,
+    voice: optionalString(value.voice),
+    language,
+    speed,
+    params: value.params,
+  };
+}
+
+function responseOutputPayload(
+  output: VoxRtcResponseOutputOptions,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  if (output.model !== undefined) payload.model = output.model;
+  if (output.voice !== undefined) payload.voice = output.voice;
+  if (output.language !== undefined) payload.language = output.language;
+  if (output.speed !== undefined) payload.speed = output.speed;
+  if (output.params !== undefined) payload.params = output.params;
+  return payload;
 }
 
 function interruptionEvent(
@@ -703,10 +736,16 @@ export class VoxRtcControlSession {
 
   startResponse(options?: VoxRtcResponseOptions): void {
     this.#responseGenerationId = options?.generationId ?? this.#nextGenerationId();
+    const payload: Record<string, unknown> = {
+      generation_id: this.#responseGenerationId,
+    };
+    if (options?.output !== undefined) {
+      payload.output = responseOutputPayload(options.output);
+    }
     this.sendControl(
       "response.start",
       withAllowInterruptions(
-        { generation_id: this.#responseGenerationId },
+        payload,
         options,
       ),
     );
@@ -728,7 +767,13 @@ export class VoxRtcControlSession {
 
       const offCreated = this.onResponseCreated((event) => {
         if (event.generationId === generationId) {
-          finish({ accepted: true, responseId: event.responseId, generationId });
+          const result: VoxRtcStartResponseResult = {
+            accepted: true,
+            responseId: event.responseId,
+            generationId,
+            ...(event.output === undefined ? {} : { output: event.output }),
+          };
+          finish(result);
         }
       });
 

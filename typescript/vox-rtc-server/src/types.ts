@@ -193,6 +193,7 @@ export interface VoxRtcResponseEvent {
   channelName: string;
   responseId?: string;
   generationId?: string;
+  output?: VoxRtcResponseOutput;
   data: Record<string, unknown>;
 }
 
@@ -259,6 +260,23 @@ export interface VoxRtcSignalingErrorEvent {
 export interface VoxRtcResponseOptions {
   allowInterruptions?: boolean;
   generationId?: string;
+  output?: VoxRtcResponseOutputOptions;
+}
+
+export interface VoxRtcResponseOutputOptions {
+  model?: string;
+  voice?: string;
+  language?: string;
+  speed?: number;
+  params?: Record<string, unknown>;
+}
+
+export interface VoxRtcResponseOutput {
+  model: string;
+  voice?: string;
+  language: string;
+  speed: number;
+  params: Record<string, unknown>;
 }
 
 export interface VoxRtcStartResponseWaitOptions extends VoxRtcResponseOptions {
@@ -266,7 +284,12 @@ export interface VoxRtcStartResponseWaitOptions extends VoxRtcResponseOptions {
 }
 
 export type VoxRtcStartResponseResult =
-  | { accepted: true; responseId?: string; generationId: string }
+  | {
+      accepted: true;
+      responseId?: string;
+      generationId: string;
+      output?: VoxRtcResponseOutput;
+    }
   | { accepted: false; error: { code?: string; recoverable: boolean; message?: string } };
 
 export interface VoxRtcSessionOptions {

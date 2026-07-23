@@ -715,6 +715,59 @@ test("response commands thread an explicit generation id", async () => {
   ]);
 });
 
+test("response.start sends typed output overrides and exposes the resolved output", async () => {
+  const { fakeSocket, session } = await attachedSession();
+
+  const pending = session.startResponseAndWait({
+    generationId: "gen-output",
+    output: {
+      model: "qwen3-tts:0.6b-clone",
+      voice: "samantha",
+      language: "fr",
+      speed: 0.9,
+      params: { temperature: 0.7 },
+    },
+  });
+  fakeSocket.channel.emit("response.created", {
+    response_id: "resp-output",
+    generation_id: "gen-output",
+    session_id: "rtc_123",
+    output: {
+      model: "qwen3-tts:0.6b-clone",
+      voice: "samantha",
+      language: "fr",
+      speed: 0.9,
+      params: { temperature: 0.7 },
+    },
+  });
+
+  assert.deepEqual(fakeSocket.channel.sent, [{
+    event: "response.start",
+    payload: {
+      generation_id: "gen-output",
+      output: {
+        model: "qwen3-tts:0.6b-clone",
+        voice: "samantha",
+        language: "fr",
+        speed: 0.9,
+        params: { temperature: 0.7 },
+      },
+    },
+  }]);
+  assert.deepEqual(await pending, {
+    accepted: true,
+    responseId: "resp-output",
+    generationId: "gen-output",
+    output: {
+      model: "qwen3-tts:0.6b-clone",
+      voice: "samantha",
+      language: "fr",
+      speed: 0.9,
+      params: { temperature: 0.7 },
+    },
+  });
+});
+
 test("sendTextResponse replaces the active response text with one command", async () => {
   const { fakeSocket, session } = await attachedSession();
 

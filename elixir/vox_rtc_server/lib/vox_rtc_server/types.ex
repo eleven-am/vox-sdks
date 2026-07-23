@@ -107,12 +107,65 @@ end
 defmodule VoxRtcServer.ResponseOptions do
   @moduledoc "Response generation options."
 
-  defstruct [:allow_interruptions, :generation_id]
+  defstruct [:allow_interruptions, :generation_id, :output]
 
   @type t :: %__MODULE__{
           allow_interruptions: boolean() | nil,
-          generation_id: String.t() | nil
+          generation_id: String.t() | nil,
+          output: VoxRtcServer.ResponseOutputOptions.t() | nil
         }
+end
+
+defmodule VoxRtcServer.ResponseOutputOptions do
+  @moduledoc false
+
+  defstruct [:model, :voice, :language, :speed, :params]
+
+  @type t :: %__MODULE__{
+          model: String.t() | nil,
+          voice: String.t() | nil,
+          language: String.t() | nil,
+          speed: float() | nil,
+          params: map() | nil
+        }
+end
+
+defmodule VoxRtcServer.ResponseOutput do
+  @moduledoc false
+
+  @enforce_keys [:model, :language, :speed, :params]
+  defstruct [:model, :voice, :language, :speed, :params]
+
+  @type t :: %__MODULE__{
+          model: String.t(),
+          voice: String.t() | nil,
+          language: String.t(),
+          speed: float(),
+          params: map()
+        }
+
+  @spec decode(Vox.ConversationResponseOutput.t() | nil) :: t() | nil
+  def decode(nil), do: nil
+
+  def decode(%Vox.ConversationResponseOutput{
+        model: model,
+        voice: voice,
+        language: language,
+        speed: speed,
+        params: params
+      })
+      when is_binary(model) and model != "" and is_binary(language) and language != "" and
+             is_number(speed) and speed > 0 and not is_nil(params) do
+    %__MODULE__{
+      model: model,
+      voice: voice,
+      language: language,
+      speed: speed,
+      params: Google.Protobuf.to_map(params)
+    }
+  end
+
+  def decode(_output), do: nil
 end
 
 defmodule VoxRtcServer.SpeechContextSpan do
@@ -373,11 +426,12 @@ defmodule VoxRtcServer.StartAck do
   @moduledoc "Vox acknowledgement for a generation-aware response start."
 
   @enforce_keys [:generation_id]
-  defstruct [:response_id, :generation_id]
+  defstruct [:response_id, :generation_id, :output]
 
   @type t :: %__MODULE__{
           response_id: String.t() | nil,
-          generation_id: String.t()
+          generation_id: String.t(),
+          output: VoxRtcServer.ResponseOutput.t() | nil
         }
 end
 

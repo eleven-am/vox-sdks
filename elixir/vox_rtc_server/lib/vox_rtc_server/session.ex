@@ -14,6 +14,7 @@ defmodule VoxRtcServer.Session do
     IceCandidate,
     Protocol,
     ResponseOptions,
+    ResponseOutput,
     SessionConfig,
     SessionDescription,
     StartAck
@@ -418,14 +419,20 @@ defmodule VoxRtcServer.Session do
            type: :response_created,
            payload: %Vox.ConversationResponseCreated{
              response_id: response_id,
-             generation_id: generation_id
+             generation_id: generation_id,
+             output: output
            }
          }
        ) do
     reply_response_waiter(
       state,
       generation_id,
-      {:ok, %StartAck{response_id: empty_to_nil(response_id), generation_id: generation_id}}
+      {:ok,
+       %StartAck{
+         response_id: empty_to_nil(response_id),
+         generation_id: generation_id,
+         output: ResponseOutput.decode(output)
+       }}
     )
   end
 

@@ -56,6 +56,25 @@ class SessionConfig:
 class ResponseOptions:
     allow_interruptions: bool | None = None
     generation_id: str | None = None
+    output: ResponseOutputOptions | None = None
+
+
+@dataclass(slots=True)
+class ResponseOutputOptions:
+    model: str | None = None
+    voice: str | None = None
+    language: str | None = None
+    speed: float | None = None
+    params: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class ResponseOutput:
+    model: str
+    language: str
+    speed: float
+    params: dict[str, Any]
+    voice: str | None = None
 
 
 @dataclass(slots=True)
@@ -195,6 +214,7 @@ class ResponseEvent:
     data: dict[str, Any]
     response_id: str | None = None
     generation_id: str | None = None
+    output: ResponseOutput | None = None
 
 
 @dataclass(slots=True)
@@ -258,6 +278,7 @@ class StartAck:
     accepted: bool
     generation_id: str
     response_id: str | None = None
+    output: ResponseOutput | None = None
     error: ErrorEvent | None = None
 
 

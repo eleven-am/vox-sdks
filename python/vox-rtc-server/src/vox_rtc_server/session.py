@@ -15,6 +15,8 @@ from .types import (
     InterruptionEvent,
     ResponseEvent,
     ResponseOptions,
+    ResponseOutput,
+    ResponseOutputOptions,
     SessionAttachedEvent,
     SessionConfig,
     SessionCreatedEvent,
@@ -265,7 +267,43 @@ def _response_options_payload(options: ResponseOptions | None) -> dict[str, Any]
             payload["allow_interruptions"] = options.allow_interruptions
         if options.generation_id is not None:
             payload["generation_id"] = options.generation_id
+        if options.output is not None:
+            payload["output"] = _response_output_options_payload(options.output)
     return payload
+
+
+def _response_output_options_payload(
+    output: ResponseOutputOptions,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for field_name in ("model", "voice", "language", "speed", "params"):
+        value = getattr(output, field_name)
+        if value is not None:
+            payload[field_name] = value
+    return payload
+
+
+def _parse_response_output(value: Any) -> ResponseOutput | None:
+    if not isinstance(value, Mapping):
+        return None
+    model = _optional_str(value.get("model"))
+    language = _optional_str(value.get("language"))
+    speed = _optional_number(value.get("speed"))
+    params = value.get("params")
+    if (
+        not model
+        or not language
+        or speed is None
+        or not isinstance(params, Mapping)
+    ):
+        return None
+    return ResponseOutput(
+        model=model,
+        voice=_optional_str(value.get("voice")),
+        language=language,
+        speed=float(speed),
+        params=dict(params),
+    )
 
 
 class VoxRtcControlSession:
@@ -493,6 +531,7 @@ class VoxRtcControlSession:
                     **self._common(payload),
                     response_id=_optional_str(payload.get("response_id")),
                     generation_id=_optional_str(payload.get("generation_id")),
+                    output=_parse_response_output(payload.get("output")),
                 )
             )
 
@@ -669,6 +708,7 @@ class VoxRtcControlSession:
                         accepted=True,
                         generation_id=generation_id,
                         response_id=event.response_id,
+                        output=event.output,
                     )
                 )
 

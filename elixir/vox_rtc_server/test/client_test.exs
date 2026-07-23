@@ -7,6 +7,8 @@ defmodule VoxRtcServer.ClientTest do
     Event,
     IceCandidate,
     ResponseOptions,
+    ResponseOutput,
+    ResponseOutputOptions,
     Session,
     SessionConfig,
     SessionDescription,
@@ -99,7 +101,17 @@ defmodule VoxRtcServer.ClientTest do
     client: client
   } do
     {_bootstrap, session, stream, _receiver} = create_attached_session(client)
-    options = %ResponseOptions{allow_interruptions: true}
+
+    options = %ResponseOptions{
+      allow_interruptions: true,
+      output: %ResponseOutputOptions{
+        model: "qwen3-tts:0.6b-clone",
+        voice: "samantha",
+        language: "fr",
+        speed: 0.9,
+        params: %{"temperature" => 0.7}
+      }
+    }
 
     assert :ok = Session.start_response(session, options)
     assert :ok = Session.append_response_text(session, "Hello", options)
@@ -116,6 +128,11 @@ defmodule VoxRtcServer.ClientTest do
     assert is_binary(start.generation_id)
     assert start.generation_id != ""
     assert start.allow_interruptions
+    assert start.output.model == "qwen3-tts:0.6b-clone"
+    assert start.output.voice == "samantha"
+    assert start.output.language == "fr"
+    assert start.output.speed == 0.9
+    assert Google.Protobuf.to_map(start.output.params) == %{"temperature" => 0.7}
 
     assert_receive {:control_sent, ^stream,
                     %Vox.RtcControlClientMessage{msg: {:response_delta, first_delta}}}
@@ -189,13 +206,27 @@ defmodule VoxRtcServer.ClientTest do
 
     send_conversation(receiver, stream, :response_created, %Vox.ConversationResponseCreated{
       response_id: "response-current",
-      generation_id: start.generation_id
+      generation_id: start.generation_id,
+      output: %Vox.ConversationResponseOutput{
+        model: "qwen3-tts:0.6b-clone",
+        voice: "samantha",
+        language: "fr",
+        speed: 0.9,
+        params: Google.Protobuf.from_map(%{"temperature" => 0.7})
+      }
     })
 
     assert {:ok,
             %StartAck{
               response_id: "response-current",
-              generation_id: generation_id
+              generation_id: generation_id,
+              output: %ResponseOutput{
+                model: "qwen3-tts:0.6b-clone",
+                voice: "samantha",
+                language: "fr",
+                speed: 0.9,
+                params: %{"temperature" => 0.7}
+              }
             }} = Task.await(task)
 
     assert generation_id == start.generation_id
@@ -427,6 +458,16 @@ defmodule VoxRtcServer.ClientTest do
       })
 
     assert SpeechContext.decode(malformed) == nil
+  end
+
+  test "rejects malformed response output instead of fabricating a typed value" do
+    malformed = %Vox.ConversationResponseOutput{
+      model: "qwen3-tts:0.6b-clone",
+      language: "fr",
+      speed: 0.9
+    }
+
+    assert ResponseOutput.decode(malformed) == nil
   end
 
   test "an attach timeout tears down the stream and returns an error", %{client: client} do

@@ -16,6 +16,7 @@ from vox_rtc_server import (
     ClientEventEnvelope,
     ConnectionState,
     ResponseOptions,
+    ResponseOutputOptions,
     SessionConfig,
     SpeechContext,
     SpeechContextSoundSpan,
@@ -672,6 +673,66 @@ def test_start_response_and_wait_resolves_on_correlated_created() -> None:
     assert ack.response_id == "resp_1"
     assert ack.error is None
     assert fake_socket.channel.sent[0][0] == "response.start"
+
+
+def test_start_response_sends_output_and_ack_exposes_resolved_output() -> None:
+    fake_socket = FakeSocket()
+
+    async def scenario() -> Any:
+        session = await _attach(fake_socket)
+        task = asyncio.ensure_future(
+            session.start_response_and_wait(
+                ResponseOptions(
+                    generation_id="gen-output",
+                    output=ResponseOutputOptions(
+                        model="qwen3-tts:0.6b-clone",
+                        voice="samantha",
+                        language="fr",
+                        speed=0.9,
+                        params={"temperature": 0.7},
+                    ),
+                )
+            )
+        )
+        await asyncio.sleep(0)
+        fake_socket.channel.emit(
+            "response.created",
+            {
+                "response_id": "resp-output",
+                "generation_id": "gen-output",
+                "session_id": "rtc_123",
+                "output": {
+                    "model": "qwen3-tts:0.6b-clone",
+                    "voice": "samantha",
+                    "language": "fr",
+                    "speed": 0.9,
+                    "params": {"temperature": 0.7},
+                },
+            },
+        )
+        return await task
+
+    ack = asyncio.run(scenario())
+
+    assert fake_socket.channel.sent[0] == (
+        "response.start",
+        {
+            "generation_id": "gen-output",
+            "output": {
+                "model": "qwen3-tts:0.6b-clone",
+                "voice": "samantha",
+                "language": "fr",
+                "speed": 0.9,
+                "params": {"temperature": 0.7},
+            },
+        },
+    )
+    assert ack.output is not None
+    assert ack.output.model == "qwen3-tts:0.6b-clone"
+    assert ack.output.voice == "samantha"
+    assert ack.output.language == "fr"
+    assert ack.output.speed == 0.9
+    assert ack.output.params == {"temperature": 0.7}
 
 
 def test_start_response_and_wait_returns_correlated_typed_rejection() -> None:

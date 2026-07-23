@@ -8,6 +8,7 @@ defmodule VoxRtcServer.Protocol do
     IceCandidate,
     IceServer,
     ResponseOptions,
+    ResponseOutputOptions,
     SessionConfig,
     SessionDescription,
     SpeechContext,
@@ -85,7 +86,8 @@ defmodule VoxRtcServer.Protocol do
   def response_start(%ResponseOptions{} = options) do
     control(:response_start, %Vox.ConversationResponseStart{
       allow_interruptions: options.allow_interruptions,
-      generation_id: options.generation_id || ""
+      generation_id: options.generation_id || "",
+      output: response_output(options.output)
     })
   end
 
@@ -183,6 +185,22 @@ defmodule VoxRtcServer.Protocol do
 
   defp decode_server_event(kind, _payload, _session_id),
     do: {:error, {:unknown_server_event, kind}}
+
+  defp response_output(nil), do: nil
+
+  defp response_output(%ResponseOutputOptions{} = output) do
+    %Vox.ConversationResponseOutput{
+      model: output.model,
+      voice: output.voice,
+      language: output.language,
+      speed: output.speed,
+      params:
+        if(is_nil(output.params),
+          do: nil,
+          else: Google.Protobuf.from_map(output.params)
+        )
+    }
+  end
 
   @conversation_events %{
     session_created: :session_created,

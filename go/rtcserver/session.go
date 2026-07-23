@@ -236,6 +236,7 @@ func (s *ControlSession) onResponseEvent(eventName string, handler func(Response
 			Data:         payload,
 			ResponseID:   stringValue(payload, "response_id", ""),
 			GenerationID: stringValue(payload, "generation_id", ""),
+			Output:       responseOutput(payload),
 		})
 	})
 }
@@ -420,7 +421,12 @@ func (s *ControlSession) StartResponseAndWait(ctx context.Context, options *Resp
 			return
 		}
 		select {
-		case ackCh <- StartAck{Accepted: true, ResponseID: event.ResponseID, GenerationID: generationID}:
+		case ackCh <- StartAck{
+			Accepted:     true,
+			ResponseID:   event.ResponseID,
+			GenerationID: generationID,
+			Output:       event.Output,
+		}:
 		default:
 		}
 	})
@@ -550,7 +556,51 @@ func responseOptionsPayload(options *ResponseOptions) map[string]interface{} {
 	if options != nil && options.GenerationID != "" {
 		payload["generation_id"] = options.GenerationID
 	}
+	if options != nil && options.Output != nil {
+		payload["output"] = responseOutputOptionsPayload(options.Output)
+	}
 	return payload
+}
+
+func responseOutputOptionsPayload(output *ResponseOutputOptions) map[string]interface{} {
+	payload := map[string]interface{}{}
+	if output.Model != "" {
+		payload["model"] = output.Model
+	}
+	if output.Voice != "" {
+		payload["voice"] = output.Voice
+	}
+	if output.Language != "" {
+		payload["language"] = output.Language
+	}
+	if output.Speed != nil {
+		payload["speed"] = *output.Speed
+	}
+	if output.Params != nil {
+		payload["params"] = output.Params
+	}
+	return payload
+}
+
+func responseOutput(payload map[string]interface{}) *ResponseOutput {
+	raw, ok := payload["output"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	model := stringValue(raw, "model", "")
+	language := stringValue(raw, "language", "")
+	speed, speedOK := raw["speed"].(float64)
+	params, paramsOK := raw["params"].(map[string]interface{})
+	if model == "" || language == "" || !speedOK || !paramsOK {
+		return nil
+	}
+	return &ResponseOutput{
+		Model:    model,
+		Voice:    stringValue(raw, "voice", ""),
+		Language: language,
+		Speed:    speed,
+		Params:   params,
+	}
 }
 
 func eventSessionID(payload map[string]interface{}, fallback string) string {

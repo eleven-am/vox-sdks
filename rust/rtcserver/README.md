@@ -61,13 +61,28 @@ Use `start_response_and_wait` to gate delta pumping on the start
 acknowledgement instead of fire-and-forget:
 
 ```rust
+use serde_json::{Map, json};
 use std::time::Duration;
+use vox_rtc_server::{ResponseOptions, ResponseOutputOptions};
 
 let ack = controlled
     .session
-    .start_response_and_wait(None, Duration::from_secs(5))
+    .start_response_and_wait(
+        Some(ResponseOptions {
+            output: Some(ResponseOutputOptions {
+                model: Some("qwen3-tts:0.6b-clone".into()),
+                voice: Some("samantha".into()),
+                language: Some("fr".into()),
+                speed: Some(0.9),
+                params: Some(Map::from_iter([("temperature".into(), json!(0.7))])),
+            }),
+            ..Default::default()
+        }),
+        Duration::from_secs(5),
+    )
     .await?;
 if ack.accepted {
+    println!("effective output: {:?}", ack.output);
     controlled.session.append_response_text("Hello.", None).await?;
     controlled.session.commit_response(None).await?;
 }
@@ -76,6 +91,9 @@ if ack.accepted {
 `response.created` with the matching `generation_id` resolves the ack as
 accepted; a typed `error` with the same `generation_id` resolves it as a
 rejection carrying `error_code`, `error_message`, and `recoverable`.
+The response-scoped `output` is optional. Vox fills omitted fields from the
+session configuration and echoes the immutable effective selection in the
+acknowledgement and `ResponseEvent`.
 
 ## Error handling
 

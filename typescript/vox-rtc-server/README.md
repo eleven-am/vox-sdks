@@ -148,8 +148,18 @@ without dropping the transcript event.
 Instead of fire-and-forget, gate delta pumping on the start acknowledgement:
 
 ```ts
-const result = await session.startResponseAndWait({ timeoutMs: 5_000 });
+const result = await session.startResponseAndWait({
+  timeoutMs: 5_000,
+  output: {
+    model: "qwen3-tts:0.6b-clone",
+    voice: "samantha",
+    language: "fr",
+    speed: 0.9,
+    params: { temperature: 0.7 },
+  },
+});
 if (result.accepted) {
+  console.log("effective output", result.output);
   session.appendResponseText("Hello.", { generationId: result.generationId });
   session.commitResponse({ generationId: result.generationId });
 } else {
@@ -161,7 +171,9 @@ if (result.accepted) {
 when not supplied) and resolves on the correlated `response.created`, on the
 correlated typed `error`, or with `{ accepted: false }` and the
 `start_ack_timeout` code when no ack arrives within `timeoutMs` (default
-10 000 ms).
+10 000 ms). `output` is optional. Vox resolves omitted output fields from the
+session configuration and returns the immutable effective selection in
+`result.output` and `onResponseCreated`.
 
 ## Error handling
 

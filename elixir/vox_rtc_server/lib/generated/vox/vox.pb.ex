@@ -1098,6 +1098,21 @@ defmodule Vox.ConversationAudioAppend do
   field(:sample_rate, 2, type: :uint32, json_name: "sampleRate")
 end
 
+defmodule Vox.ConversationResponseOutput do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "vox.ConversationResponseOutput",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:model, 1, proto3_optional: true, type: :string)
+  field(:voice, 2, proto3_optional: true, type: :string)
+  field(:language, 3, proto3_optional: true, type: :string)
+  field(:speed, 4, proto3_optional: true, type: :float)
+  field(:params, 5, type: Google.Protobuf.Struct)
+end
+
 defmodule Vox.ConversationResponseStart do
   @moduledoc false
 
@@ -1113,6 +1128,7 @@ defmodule Vox.ConversationResponseStart do
   )
 
   field(:generation_id, 2, type: :string, json_name: "generationId")
+  field(:output, 3, type: Vox.ConversationResponseOutput)
 end
 
 defmodule Vox.ConversationResponseDelta do
@@ -1249,6 +1265,7 @@ defmodule Vox.ConversationResponseCreated do
 
   field(:response_id, 1, type: :string, json_name: "responseId")
   field(:generation_id, 2, type: :string, json_name: "generationId")
+  field(:output, 3, type: Vox.ConversationResponseOutput)
 end
 
 defmodule Vox.ConversationAudioDelta do

@@ -81,12 +81,30 @@ type SessionOptions struct {
 type ResponseOptions struct {
 	AllowInterruptions *bool
 	GenerationID       string
+	Output             *ResponseOutputOptions
+}
+
+type ResponseOutputOptions struct {
+	Model    string
+	Voice    string
+	Language string
+	Speed    *float64
+	Params   map[string]interface{}
+}
+
+type ResponseOutput struct {
+	Model    string
+	Voice    string
+	Language string
+	Speed    float64
+	Params   map[string]interface{}
 }
 
 type StartAck struct {
 	Accepted     bool
 	ResponseID   string
 	GenerationID string
+	Output       *ResponseOutput
 	Error        *ErrorEvent
 }
 
@@ -230,6 +248,7 @@ type ResponseEvent struct {
 	Data         map[string]interface{}
 	ResponseID   string
 	GenerationID string
+	Output       *ResponseOutput
 }
 
 type InterruptionEvent struct {
