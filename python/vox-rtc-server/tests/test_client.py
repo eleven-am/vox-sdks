@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,7 +17,18 @@ from vox_rtc_server import (
     ConnectionState,
     ResponseOptions,
     SessionConfig,
+    SpeechContext,
+    SpeechContextSoundSpan,
+    SpeechContextSpan,
     VoxRtcServerClient,
+)
+
+SPEECH_CONTEXT_FIXTURE = json.loads(
+    (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "speech-context-v2.json"
+    ).read_text(encoding="utf-8")
 )
 
 
@@ -306,7 +318,7 @@ def test_named_event_hooks_map_common_vox_events() -> None:
             "end_ms": 20,
             "eou_probability": 0.7,
             "topics": ["hello"],
-            "speech_context": {"schema_version": 1, "status": "complete"},
+            "speech_context": SPEECH_CONTEXT_FIXTURE,
             "session_id": "rtc_123",
         },
     )
@@ -350,10 +362,16 @@ def test_named_event_hooks_map_common_vox_events() -> None:
     assert transcripts[0].end_ms == 20
     assert transcripts[0].eou_probability == 0.7
     assert transcripts[0].topics == ["hello"]
-    assert transcripts[0].speech_context == {
-        "schema_version": 1,
-        "status": "complete",
-    }
+    assert transcripts[0].speech_context == SpeechContext(
+        schema_version=2,
+        status="complete",
+        emotions=[SpeechContextSpan("surprised", 0, 2500)],
+        vocal=[SpeechContextSpan("laughter", 7000, 10500)],
+        sounds=[
+            SpeechContextSoundSpan("fireworks", 3360, 4320, 0.42),
+            SpeechContextSoundSpan("inside, small room", 3840, 5280, 0.31),
+        ],
+    )
     assert transcripts[0].session_id == "rtc_123"
     assert transcripts[0].channel_name == "/rtc/rtc_123"
 
@@ -777,6 +795,39 @@ def test_on_transcript_without_entities_or_words_leaves_them_none() -> None:
     assert len(transcripts) == 1
     assert transcripts[0].entities is None
     assert transcripts[0].words is None
+
+
+def test_on_transcript_preserves_text_but_rejects_malformed_speech_context() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+    transcripts: list[Any] = []
+    unsubscribe = session.on_transcript(transcripts.append)
+
+    fake_socket.channel.emit(
+        "conversation.item.input_audio_transcription.completed",
+        {
+            "transcript": "still delivered",
+            "speech_context": {
+                "schema_version": 2,
+                "status": "complete",
+                "emotions": [],
+                "vocal": [],
+                "sounds": [
+                    {
+                        "label": "fireworks",
+                        "start_ms": 0,
+                        "end_ms": 960,
+                        "score": 1.1,
+                    }
+                ],
+            },
+            "session_id": "rtc_123",
+        },
+    )
+    unsubscribe()
+
+    assert transcripts[0].transcript == "still delivered"
+    assert transcripts[0].speech_context is None
 
 
 def test_interruption_events_expose_reason() -> None:

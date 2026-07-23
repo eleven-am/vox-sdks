@@ -18,6 +18,10 @@ import type {
   VoxRtcSessionCreatedEvent,
   VoxRtcSessionDescription,
   VoxRtcSignalingErrorEvent,
+  VoxRtcSpeechContext,
+  VoxRtcSpeechContextSoundSpan,
+  VoxRtcSpeechContextSpan,
+  VoxRtcSpeechContextTrack,
   VoxRtcSpeechEvent,
   VoxRtcStartResponseResult,
   VoxRtcStartResponseWaitOptions,
@@ -123,6 +127,123 @@ function optionalWords(value: unknown): VoxRtcTranscriptWord[] | undefined {
     });
   }
   return words;
+}
+
+function speechContextSpan(value: unknown): VoxRtcSpeechContextSpan | undefined {
+  if (!isObjectRecord(value)) return undefined;
+  const label = optionalString(value.label);
+  const startMs = optionalNumber(value.start_ms);
+  const endMs = optionalNumber(value.end_ms);
+  if (
+    !label
+    || startMs === undefined
+    || endMs === undefined
+    || !Number.isSafeInteger(startMs)
+    || !Number.isSafeInteger(endMs)
+    || startMs < 0
+    || endMs <= startMs
+  ) {
+    return undefined;
+  }
+  return { label, startMs, endMs };
+}
+
+function speechContextSpans(value: unknown): VoxRtcSpeechContextSpan[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const spans = value.map(speechContextSpan);
+  return spans.every((span): span is VoxRtcSpeechContextSpan => span !== undefined)
+    ? spans
+    : undefined;
+}
+
+function speechContextSoundSpan(value: unknown): VoxRtcSpeechContextSoundSpan | undefined {
+  const span = speechContextSpan(value);
+  if (!span || !isObjectRecord(value)) return undefined;
+  const score = optionalNumber(value.score);
+  if (score === undefined || score < 0 || score > 1) return undefined;
+  return { ...span, score };
+}
+
+function speechContextSoundSpans(value: unknown): VoxRtcSpeechContextSoundSpan[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const spans = value.map(speechContextSoundSpan);
+  return spans.every((span): span is VoxRtcSpeechContextSoundSpan => span !== undefined)
+    ? spans
+    : undefined;
+}
+
+function speechContextTracks(value: unknown): VoxRtcSpeechContextTrack[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tracks = value.filter(
+    (track): track is VoxRtcSpeechContextTrack => track === "speaker" || track === "sounds",
+  );
+  return tracks.length === value.length && new Set(tracks).size === tracks.length
+    ? tracks
+    : undefined;
+}
+
+function optionalSpeechContext(value: unknown): VoxRtcSpeechContext | undefined {
+  if (!isObjectRecord(value) || value.schema_version !== 2) return undefined;
+  const { status } = value;
+  if (status !== "complete" && status !== "partial" && status !== "failed") {
+    return undefined;
+  }
+
+  const emotions = speechContextSpans(value.emotions);
+  const vocal = speechContextSpans(value.vocal);
+  const sounds = speechContextSoundSpans(value.sounds);
+  const unavailable = speechContextTracks(value.unavailable);
+
+  if (status === "complete") {
+    if (!emotions || !vocal || !sounds || value.unavailable !== undefined) return undefined;
+    return { schemaVersion: 2, status, emotions, vocal, sounds };
+  }
+  if (!unavailable) return undefined;
+  if (status === "failed") {
+    if (
+      unavailable.length !== 2
+      || !unavailable.includes("speaker")
+      || !unavailable.includes("sounds")
+    ) {
+      return undefined;
+    }
+  } else if (unavailable.length !== 1) {
+    return undefined;
+  }
+  if (
+    (unavailable.includes("speaker") && (emotions !== undefined || vocal !== undefined))
+    || (!unavailable.includes("speaker") && (!emotions || !vocal))
+    || (unavailable.includes("sounds") && sounds !== undefined)
+    || (!unavailable.includes("sounds") && !sounds)
+  ) {
+    return undefined;
+  }
+  if (status === "failed") {
+    return {
+      schemaVersion: 2,
+      status,
+      unavailable: unavailable[0] === "speaker"
+        ? ["speaker", "sounds"]
+        : ["sounds", "speaker"],
+    };
+  }
+  if (unavailable[0] === "speaker") {
+    if (!sounds) return undefined;
+    return {
+      schemaVersion: 2,
+      status,
+      sounds,
+      unavailable: ["speaker"],
+    };
+  }
+  if (!emotions || !vocal) return undefined;
+  return {
+    schemaVersion: 2,
+    status,
+    emotions,
+    vocal,
+    unavailable: ["sounds"],
+  };
 }
 
 function baseEvent(
@@ -428,9 +549,7 @@ export class VoxRtcControlSession {
         topics: optionalStringArray(payload.topics),
         entities: optionalEntities(payload.entities),
         words: optionalWords(payload.words),
-        speechContext: isObjectRecord(payload.speech_context)
-          ? payload.speech_context
-          : undefined,
+        speechContext: optionalSpeechContext(payload.speech_context),
       });
     });
   }

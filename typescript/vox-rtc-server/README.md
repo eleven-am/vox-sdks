@@ -107,6 +107,35 @@ user turn for prosody and audio events. The optional result is exposed as
 `event.speechContext` on `onTranscript`; partial transcript events do not carry
 speech context.
 
+`speechContext` is the `VoxRtcSpeechContext` discriminated union. Schema v2
+separates speaker analysis from environmental audio:
+
+```ts
+session.onTranscript(({ speechContext }) => {
+  if (!speechContext) return;
+
+  for (const span of speechContext.emotions ?? []) {
+    console.log("emotion", span.label, span.startMs, span.endMs);
+  }
+  for (const span of speechContext.vocal ?? []) {
+    console.log("vocal event", span.label, span.startMs, span.endMs);
+  }
+  for (const sound of speechContext.sounds ?? []) {
+    console.log("environment", sound.label, sound.score);
+  }
+
+  if (speechContext.status !== "complete") {
+    console.log("unavailable tracks", speechContext.unavailable);
+  }
+});
+```
+
+`emotions` and `vocal` contain timestamped speaker spans. `sounds` contains
+timestamped environmental events with a `score` from 0 to 1. A `partial`
+result names the unavailable `"speaker"` or `"sounds"` track; a `failed`
+result names both. Unsupported or malformed speech-context data is omitted
+without dropping the transcript event.
+
 ## Generation correlation
 
 `startResponse`, `appendResponseText`, `commitResponse`, `cancelResponse`,

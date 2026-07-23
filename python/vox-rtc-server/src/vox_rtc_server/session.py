@@ -20,6 +20,10 @@ from .types import (
     SessionCreatedEvent,
     SignalingErrorEvent,
     SocketChannelLike,
+    SpeechContext,
+    SpeechContextSoundSpan,
+    SpeechContextSpan,
+    SpeechContextTrack,
     SpeechEvent,
     StartAck,
     TranscriptDeltaEvent,
@@ -130,6 +134,128 @@ def _parse_words(value: Any) -> list[TranscriptWord] | None:
         if isinstance(item, Mapping)
     ]
     return words or None
+
+
+def _parse_speech_context_span(value: Any) -> SpeechContextSpan | None:
+    if not isinstance(value, Mapping):
+        return None
+    label = value.get("label")
+    start_ms = value.get("start_ms")
+    end_ms = value.get("end_ms")
+    if (
+        not isinstance(label, str)
+        or not label
+        or isinstance(start_ms, bool)
+        or not isinstance(start_ms, int)
+        or start_ms < 0
+        or isinstance(end_ms, bool)
+        or not isinstance(end_ms, int)
+        or end_ms <= start_ms
+    ):
+        return None
+    return SpeechContextSpan(label=label, start_ms=start_ms, end_ms=end_ms)
+
+
+def _parse_speech_context_spans(value: Any) -> list[SpeechContextSpan] | None:
+    if not isinstance(value, list):
+        return None
+    spans = [_parse_speech_context_span(item) for item in value]
+    return [span for span in spans if span is not None] if all(spans) else None
+
+
+def _parse_speech_context_sound_span(
+    value: Any,
+) -> SpeechContextSoundSpan | None:
+    span = _parse_speech_context_span(value)
+    if span is None or not isinstance(value, Mapping):
+        return None
+    score = value.get("score")
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not 0 <= score <= 1
+    ):
+        return None
+    return SpeechContextSoundSpan(
+        label=span.label,
+        start_ms=span.start_ms,
+        end_ms=span.end_ms,
+        score=float(score),
+    )
+
+
+def _parse_speech_context_sound_spans(
+    value: Any,
+) -> list[SpeechContextSoundSpan] | None:
+    if not isinstance(value, list):
+        return None
+    spans = [_parse_speech_context_sound_span(item) for item in value]
+    return [span for span in spans if span is not None] if all(spans) else None
+
+
+def _parse_speech_context_tracks(
+    value: Any,
+) -> list[SpeechContextTrack] | None:
+    if (
+        not isinstance(value, list)
+        or not all(
+            isinstance(item, str) and item in {"speaker", "sounds"}
+            for item in value
+        )
+        or len(set(value)) != len(value)
+    ):
+        return None
+    return list(value)
+
+
+def _parse_speech_context(value: Any) -> SpeechContext | None:
+    if not isinstance(value, Mapping) or value.get("schema_version") != 2:
+        return None
+    status = value.get("status")
+    if status not in {"complete", "partial", "failed"}:
+        return None
+    emotions = _parse_speech_context_spans(value.get("emotions"))
+    vocal = _parse_speech_context_spans(value.get("vocal"))
+    sounds = _parse_speech_context_sound_spans(value.get("sounds"))
+    unavailable = _parse_speech_context_tracks(value.get("unavailable"))
+
+    if status == "complete":
+        if (
+            emotions is None
+            or vocal is None
+            or sounds is None
+            or "unavailable" in value
+        ):
+            return None
+        return SpeechContext(
+            schema_version=2,
+            status="complete",
+            emotions=emotions,
+            vocal=vocal,
+            sounds=sounds,
+        )
+    if unavailable is None:
+        return None
+    if status == "failed":
+        if set(unavailable) != {"speaker", "sounds"}:
+            return None
+    elif len(unavailable) != 1:
+        return None
+    if (
+        ("speaker" in unavailable and (emotions is not None or vocal is not None))
+        or ("speaker" not in unavailable and (emotions is None or vocal is None))
+        or ("sounds" in unavailable and sounds is not None)
+        or ("sounds" not in unavailable and sounds is None)
+    ):
+        return None
+    return SpeechContext(
+        schema_version=2,
+        status=status,
+        emotions=emotions,
+        vocal=vocal,
+        sounds=sounds,
+        unavailable=unavailable,
+    )
 
 
 def _response_options_payload(options: ResponseOptions | None) -> dict[str, Any]:
@@ -275,10 +401,8 @@ class VoxRtcControlSession:
                     topics=_optional_str_list(payload.get("topics")),
                     entities=_parse_entities(payload.get("entities")),
                     words=_parse_words(payload.get("words")),
-                    speech_context=(
-                        dict(payload["speech_context"])
-                        if isinstance(payload.get("speech_context"), Mapping)
-                        else None
+                    speech_context=_parse_speech_context(
+                        payload.get("speech_context")
                     ),
                 )
             )

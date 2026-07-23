@@ -10,6 +10,8 @@ defmodule VoxRtcServer.Protocol do
     ResponseOptions,
     SessionConfig,
     SessionDescription,
+    SpeechContext,
+    TranscriptCompleted,
     TurnPolicy
   }
 
@@ -187,7 +189,6 @@ defmodule VoxRtcServer.Protocol do
     speech_started: :speech_started,
     speech_stopped: :speech_stopped,
     transcript_delta: :transcript_delta,
-    transcript_done: :transcript_completed,
     response_created: :response_created,
     response_committed: :response_committed,
     audio_delta: :response_audio,
@@ -200,6 +201,27 @@ defmodule VoxRtcServer.Protocol do
     turn_eou_predicted: :turn_eou_predicted,
     error: :error
   }
+
+  defp decode_conversation_event(
+         %Vox.ConverseServerMessage{msg: {:transcript_done, payload}},
+         session_id
+       ) do
+    event(
+      :transcript_completed,
+      %TranscriptCompleted{
+        transcript: payload.transcript,
+        language: payload.language,
+        start_ms: payload.start_ms,
+        end_ms: payload.end_ms,
+        eou_probability: payload.eou_probability,
+        entities: payload.entities,
+        topics: payload.topics,
+        words: payload.words,
+        speech_context: SpeechContext.decode(payload.speech_context)
+      },
+      session_id
+    )
+  end
 
   defp decode_conversation_event(%Vox.ConverseServerMessage{msg: {kind, payload}}, session_id) do
     case Map.fetch(@conversation_events, kind) do

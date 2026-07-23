@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -137,7 +138,7 @@ func (s *ControlSession) OnTranscript(handler func(TranscriptEvent)) func() {
 			Topics:         stringSliceValue(payload, "topics"),
 			Entities:       transcriptEntities(payload),
 			Words:          transcriptWords(payload),
-			SpeechContext:  mapValue(payload, "speech_context"),
+			SpeechContext:  speechContextValue(payload, "speech_context"),
 		})
 	})
 }
@@ -651,6 +652,149 @@ func transcriptWords(payload map[string]interface{}) []TranscriptWord {
 		words = append(words, word)
 	}
 	return words
+}
+
+func speechContextSpan(value interface{}) (SpeechContextSpan, bool) {
+	const maxSafeInteger = 1<<53 - 1
+
+	fields, ok := value.(map[string]interface{})
+	if !ok {
+		return SpeechContextSpan{}, false
+	}
+	label := stringValue(fields, "label", "")
+	start, startOK := optionalNumber(fields, "start_ms")
+	end, endOK := optionalNumber(fields, "end_ms")
+	if label == "" || !startOK || !endOK || start < 0 || end <= start ||
+		start > maxSafeInteger || end > maxSafeInteger ||
+		math.Trunc(start) != start || math.Trunc(end) != end {
+		return SpeechContextSpan{}, false
+	}
+	return SpeechContextSpan{Label: label, StartMS: int64(start), EndMS: int64(end)}, true
+}
+
+func speechContextSpans(value interface{}) ([]SpeechContextSpan, bool) {
+	raw, ok := value.([]interface{})
+	if !ok {
+		return nil, false
+	}
+	spans := make([]SpeechContextSpan, 0, len(raw))
+	for _, item := range raw {
+		span, valid := speechContextSpan(item)
+		if !valid {
+			return nil, false
+		}
+		spans = append(spans, span)
+	}
+	return spans, true
+}
+
+func speechContextSoundSpans(value interface{}) ([]SpeechContextSoundSpan, bool) {
+	raw, ok := value.([]interface{})
+	if !ok {
+		return nil, false
+	}
+	spans := make([]SpeechContextSoundSpan, 0, len(raw))
+	for _, item := range raw {
+		span, valid := speechContextSpan(item)
+		fields, fieldsOK := item.(map[string]interface{})
+		if !valid || !fieldsOK {
+			return nil, false
+		}
+		score, scoreOK := optionalNumber(fields, "score")
+		if !scoreOK || math.IsNaN(score) || math.IsInf(score, 0) || score < 0 || score > 1 {
+			return nil, false
+		}
+		spans = append(spans, SpeechContextSoundSpan{
+			SpeechContextSpan: span,
+			Score:             score,
+		})
+	}
+	return spans, true
+}
+
+func speechContextTracks(value interface{}) ([]SpeechContextTrack, bool) {
+	raw, ok := value.([]interface{})
+	if !ok {
+		return nil, false
+	}
+	tracks := make([]SpeechContextTrack, 0, len(raw))
+	seen := map[SpeechContextTrack]bool{}
+	for _, item := range raw {
+		text, ok := item.(string)
+		track := SpeechContextTrack(text)
+		if !ok || (track != SpeechContextSpeaker && track != SpeechContextSounds) || seen[track] {
+			return nil, false
+		}
+		seen[track] = true
+		tracks = append(tracks, track)
+	}
+	return tracks, true
+}
+
+func containsSpeechContextTrack(tracks []SpeechContextTrack, target SpeechContextTrack) bool {
+	for _, track := range tracks {
+		if track == target {
+			return true
+		}
+	}
+	return false
+}
+
+func speechContextValue(payload map[string]interface{}, key string) *SpeechContext {
+	fields := mapValue(payload, key)
+	version, versionOK := optionalNumber(fields, "schema_version")
+	if !versionOK || version != 2 {
+		return nil
+	}
+	status := SpeechContextStatus(stringValue(fields, "status", ""))
+	if status != SpeechContextComplete && status != SpeechContextPartial && status != SpeechContextFailed {
+		return nil
+	}
+	emotions, emotionsOK := speechContextSpans(fields["emotions"])
+	vocal, vocalOK := speechContextSpans(fields["vocal"])
+	sounds, soundsOK := speechContextSoundSpans(fields["sounds"])
+	unavailable, unavailableOK := speechContextTracks(fields["unavailable"])
+
+	if status == SpeechContextComplete {
+		if !emotionsOK || !vocalOK || !soundsOK || fields["unavailable"] != nil {
+			return nil
+		}
+		return &SpeechContext{
+			SchemaVersion: 2,
+			Status:        status,
+			Emotions:      emotions,
+			Vocal:         vocal,
+			Sounds:        sounds,
+		}
+	}
+	if !unavailableOK {
+		return nil
+	}
+	if status == SpeechContextFailed {
+		if len(unavailable) != 2 ||
+			!containsSpeechContextTrack(unavailable, SpeechContextSpeaker) ||
+			!containsSpeechContextTrack(unavailable, SpeechContextSounds) {
+			return nil
+		}
+	} else if len(unavailable) != 1 {
+		return nil
+	}
+	speakerUnavailable := containsSpeechContextTrack(unavailable, SpeechContextSpeaker)
+	soundsUnavailable := containsSpeechContextTrack(unavailable, SpeechContextSounds)
+	if (speakerUnavailable && (emotionsOK || vocalOK)) ||
+		(!speakerUnavailable && (!emotionsOK || !vocalOK)) ||
+		(soundsUnavailable && soundsOK) ||
+		(!soundsUnavailable && !soundsOK) {
+		return nil
+	}
+	return &SpeechContext{
+		SchemaVersion: 2,
+		Status:        status,
+		Emotions:      emotions,
+		Vocal:         vocal,
+		Sounds:        sounds,
+		Unavailable:   unavailable,
+	}
 }
 
 func stringSliceValue(payload map[string]interface{}, key string) []string {

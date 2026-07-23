@@ -191,8 +191,9 @@ impl VoxRtcControlSession {
                 words: transcript_words(&payload),
                 speech_context: payload
                     .get("speech_context")
-                    .and_then(Value::as_object)
-                    .cloned(),
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<SpeechContext>(value).ok())
+                    .filter(SpeechContext::is_valid),
                 data: payload,
             });
         })
@@ -993,7 +994,9 @@ mod tests {
                         { "word": "call", "start_ms": 0, "end_ms": 300 },
                         { "word": "Ada", "start_ms": 300, "end_ms": 600, "confidence": 0.91 }
                     ],
-                    "speech_context": { "schema_version": 1, "status": "complete" }
+                    "speech_context": serde_json::from_str::<Value>(include_str!(
+                        "../../../fixtures/speech-context-v2.json"
+                    )).unwrap()
                 })),
             ))
             .unwrap();
@@ -1012,14 +1015,23 @@ mod tests {
         assert_eq!(event.words[0].start_ms, 0.0);
         assert_eq!(event.words[0].confidence, None);
         assert_eq!(event.words[1].confidence, Some(0.91));
+        let context = event.speech_context.expect("speech context");
+        assert_eq!(context.schema_version, 2);
+        assert_eq!(context.status, SpeechContextStatus::Complete);
         assert_eq!(
-            event
-                .speech_context
-                .as_ref()
-                .and_then(|context| context.get("status"))
-                .and_then(Value::as_str),
-            Some("complete")
+            context.emotions.as_deref(),
+            Some(
+                &[SpeechContextSpan {
+                    label: "surprised".to_owned(),
+                    start_ms: 0,
+                    end_ms: 2500,
+                }][..]
+            )
         );
+        let sounds = context.sounds.expect("sound spans");
+        assert_eq!(sounds.len(), 2);
+        assert_eq!(sounds[0].span.label, "fireworks");
+        assert_eq!(sounds[0].score, 0.42);
     }
 
     #[tokio::test]
@@ -1038,6 +1050,40 @@ mod tests {
         let event = recv(&mut rx).await;
         assert!(event.entities.is_empty());
         assert!(event.words.is_empty());
+        assert!(event.speech_context.is_none());
+    }
+
+    #[tokio::test]
+    async fn on_transcript_preserves_text_but_rejects_malformed_speech_context() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_transcript(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_TRANSCRIPT_COMPLETED.to_owned(),
+                payload(json!({
+                    "transcript": "still delivered",
+                    "speech_context": {
+                        "schema_version": 2,
+                        "status": "complete",
+                        "emotions": [],
+                        "vocal": [],
+                        "sounds": [
+                            {
+                                "label": "fireworks",
+                                "start_ms": 0,
+                                "end_ms": 960,
+                                "score": 1.1
+                            }
+                        ]
+                    }
+                })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.transcript, "still delivered");
         assert!(event.speech_context.is_none());
     }
 

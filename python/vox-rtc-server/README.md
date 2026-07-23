@@ -46,8 +46,32 @@ asyncio.run(main())
 ```
 
 Speech context is opt-in and final-only. When enabled, the final
-`TranscriptEvent.speech_context` contains Vox's versioned prosody and dynamic
-audio-event result; otherwise it is `None`.
+`TranscriptEvent.speech_context` is a typed `SpeechContext`; otherwise it is
+`None`.
+
+Schema v2 exposes timestamped `emotions` and `vocal` speaker spans plus
+environmental `sounds`. Sound spans also carry a `score` from 0 to 1:
+
+```python
+def handle_transcript(event: TranscriptEvent) -> None:
+    context = event.speech_context
+    if context is None:
+        return
+
+    for span in context.emotions or []:
+        print("emotion", span.label, span.start_ms, span.end_ms)
+    for span in context.vocal or []:
+        print("vocal event", span.label, span.start_ms, span.end_ms)
+    for sound in context.sounds or []:
+        print("environment", sound.label, sound.score)
+
+    if context.status != "complete":
+        print("unavailable tracks", context.unavailable)
+```
+
+A `partial` result identifies the unavailable `"speaker"` or `"sounds"`
+track; a `failed` result identifies both. Unsupported or malformed context is
+decoded as `None` without dropping the transcript event.
 
 ## Acknowledged response starts
 

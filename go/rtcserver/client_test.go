@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,19 @@ type fakeChannel struct {
 type sentMessage struct {
 	event   string
 	payload map[string]interface{}
+}
+
+func speechContextFixture(t *testing.T) map[string]interface{} {
+	t.Helper()
+	data, err := os.ReadFile("../../fixtures/speech-context-v2.json")
+	if err != nil {
+		t.Fatalf("read speech context fixture: %v", err)
+	}
+	var fixture map[string]interface{}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatalf("decode speech context fixture: %v", err)
+	}
+	return fixture
 }
 
 func (f *fakeChannel) Join() {
@@ -378,7 +392,7 @@ func TestNamedEventHooks(t *testing.T) {
 		"end_ms":          20,
 		"eou_probability": 0.7,
 		"topics":          []interface{}{"hello"},
-		"speech_context":  map[string]interface{}{"schema_version": 1, "status": "complete"},
+		"speech_context":  speechContextFixture(t),
 		"session_id":      "rtc_123",
 	})
 	fake.channel.emit(EventTurnStateChanged, map[string]interface{}{
@@ -412,7 +426,15 @@ func TestNamedEventHooks(t *testing.T) {
 	if len(transcript.Topics) != 1 || transcript.Topics[0] != "hello" {
 		t.Fatalf("unexpected topics: %#v", transcript.Topics)
 	}
-	if transcript.SpeechContext["status"] != "complete" {
+	if transcript.SpeechContext == nil ||
+		transcript.SpeechContext.Status != SpeechContextComplete ||
+		len(transcript.SpeechContext.Emotions) != 1 ||
+		transcript.SpeechContext.Emotions[0].Label != "surprised" ||
+		len(transcript.SpeechContext.Vocal) != 1 ||
+		transcript.SpeechContext.Vocal[0].Label != "laughter" ||
+		len(transcript.SpeechContext.Sounds) != 2 ||
+		transcript.SpeechContext.Sounds[0].Label != "fireworks" ||
+		transcript.SpeechContext.Sounds[0].Score != 0.42 {
 		t.Fatalf("unexpected speech context: %#v", transcript.SpeechContext)
 	}
 	if turn.State != "speaking" || turn.PreviousState != "idle" {
@@ -764,6 +786,37 @@ func TestOnTranscriptIncludesEntitiesAndWords(t *testing.T) {
 	}
 	if event.Words[1].Confidence != nil {
 		t.Fatalf("expected omitted confidence to stay nil: %#v", event.Words[1].Confidence)
+	}
+}
+
+func TestOnTranscriptPreservesTextButRejectsMalformedSpeechContext(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event TranscriptEvent
+	session.OnTranscript(func(received TranscriptEvent) {
+		event = received
+	})
+	fake.channel.emit(EventTranscriptCompleted, map[string]interface{}{
+		"transcript": "still delivered",
+		"speech_context": map[string]interface{}{
+			"schema_version": 2.0,
+			"status":         "complete",
+			"emotions":       []interface{}{},
+			"vocal":          []interface{}{},
+			"sounds": []interface{}{
+				map[string]interface{}{
+					"label":    "fireworks",
+					"start_ms": 0.0,
+					"end_ms":   960.0,
+					"score":    1.1,
+				},
+			},
+		},
+		"session_id": "rtc_123",
+	})
+
+	if event.Transcript != "still delivered" || event.SpeechContext != nil {
+		t.Fatalf("unexpected transcript event: %#v", event)
 	}
 }
 

@@ -77,6 +77,64 @@ export interface VoxRtcTranscriptWord {
   confidence?: number;
 }
 
+export type VoxRtcSpeechContextStatus = "complete" | "partial" | "failed";
+export type VoxRtcSpeechContextTrack = "speaker" | "sounds";
+
+export interface VoxRtcSpeechContextSpan {
+  label: string;
+  startMs: number;
+  endMs: number;
+}
+
+export interface VoxRtcSpeechContextSoundSpan extends VoxRtcSpeechContextSpan {
+  score: number;
+}
+
+interface VoxRtcSpeechContextBase {
+  schemaVersion: 2;
+}
+
+export interface VoxRtcSpeechContextComplete extends VoxRtcSpeechContextBase {
+  status: "complete";
+  emotions: VoxRtcSpeechContextSpan[];
+  vocal: VoxRtcSpeechContextSpan[];
+  sounds: VoxRtcSpeechContextSoundSpan[];
+  unavailable?: never;
+}
+
+export interface VoxRtcSpeechContextSpeakerUnavailable extends VoxRtcSpeechContextBase {
+  status: "partial";
+  emotions?: never;
+  vocal?: never;
+  sounds: VoxRtcSpeechContextSoundSpan[];
+  unavailable: ["speaker"];
+}
+
+export interface VoxRtcSpeechContextSoundsUnavailable extends VoxRtcSpeechContextBase {
+  status: "partial";
+  emotions: VoxRtcSpeechContextSpan[];
+  vocal: VoxRtcSpeechContextSpan[];
+  sounds?: never;
+  unavailable: ["sounds"];
+}
+
+export type VoxRtcSpeechContextPartial =
+  | VoxRtcSpeechContextSpeakerUnavailable
+  | VoxRtcSpeechContextSoundsUnavailable;
+
+export interface VoxRtcSpeechContextFailed extends VoxRtcSpeechContextBase {
+  status: "failed";
+  emotions?: never;
+  vocal?: never;
+  sounds?: never;
+  unavailable: ["speaker", "sounds"] | ["sounds", "speaker"];
+}
+
+export type VoxRtcSpeechContext =
+  | VoxRtcSpeechContextComplete
+  | VoxRtcSpeechContextPartial
+  | VoxRtcSpeechContextFailed;
+
 export interface VoxRtcTranscriptEvent {
   sessionId: string;
   channelName: string;
@@ -88,7 +146,7 @@ export interface VoxRtcTranscriptEvent {
   topics?: string[];
   entities?: VoxRtcTranscriptEntity[];
   words?: VoxRtcTranscriptWord[];
-  speechContext?: Record<string, unknown>;
+  speechContext?: VoxRtcSpeechContext;
   data: Record<string, unknown>;
 }
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Literal, Protocol, TypeAlias
 
 
 class ConnectionState(StrEnum):
@@ -104,6 +104,32 @@ class TranscriptWord:
     confidence: float | None = None
 
 
+SpeechContextStatus: TypeAlias = Literal["complete", "partial", "failed"]
+SpeechContextTrack: TypeAlias = Literal["speaker", "sounds"]
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechContextSpan:
+    label: str
+    start_ms: int
+    end_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechContextSoundSpan(SpeechContextSpan):
+    score: float
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechContext:
+    schema_version: Literal[2]
+    status: SpeechContextStatus
+    emotions: list[SpeechContextSpan] | None = None
+    vocal: list[SpeechContextSpan] | None = None
+    sounds: list[SpeechContextSoundSpan] | None = None
+    unavailable: list[SpeechContextTrack] | None = None
+
+
 @dataclass(slots=True)
 class TranscriptEvent:
     session_id: str
@@ -117,7 +143,7 @@ class TranscriptEvent:
     topics: list[str] | None = None
     entities: list[TranscriptEntity] | None = None
     words: list[TranscriptWord] | None = None
-    speech_context: dict[str, Any] | None = None
+    speech_context: SpeechContext | None = None
 
 
 @dataclass(slots=True)

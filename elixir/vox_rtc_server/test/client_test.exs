@@ -10,6 +10,10 @@ defmodule VoxRtcServer.ClientTest do
     Session,
     SessionConfig,
     SessionDescription,
+    SpeechContext,
+    SpeechContextSoundSpan,
+    SpeechContextSpan,
+    TranscriptCompleted,
     StartAck
   }
 
@@ -313,14 +317,52 @@ defmodule VoxRtcServer.ClientTest do
          %Vox.ConverseServerMessage{
            msg:
              {:transcript_done,
-              %Vox.ConversationTranscriptDone{transcript: "hello", language: "en"}}
+              %Vox.ConversationTranscriptDone{
+                transcript: "hello",
+                language: "en",
+                speech_context: speech_context_fixture()
+              }}
          }}
     })
 
     assert_receive {:vox_rtc, ^session,
                     %Event{
                       type: :transcript_completed,
-                      payload: %Vox.ConversationTranscriptDone{transcript: "hello"}
+                      payload: %TranscriptCompleted{
+                        transcript: "hello",
+                        speech_context: %SpeechContext{
+                          schema_version: 2,
+                          status: :complete,
+                          emotions: [
+                            %SpeechContextSpan{
+                              label: "surprised",
+                              start_ms: 0,
+                              end_ms: 2500
+                            }
+                          ],
+                          vocal: [
+                            %SpeechContextSpan{
+                              label: "laughter",
+                              start_ms: 7000,
+                              end_ms: 10_500
+                            }
+                          ],
+                          sounds: [
+                            %SpeechContextSoundSpan{
+                              label: "fireworks",
+                              start_ms: 3360,
+                              end_ms: 4320,
+                              score: 0.42
+                            },
+                            %SpeechContextSoundSpan{
+                              label: "inside, small room",
+                              start_ms: 3840,
+                              end_ms: 5280,
+                              score: 0.31
+                            }
+                          ]
+                        }
+                      }
                     }}
 
     send_server(receiver, stream, %Vox.RtcControlServerMessage{
@@ -365,6 +407,26 @@ defmodule VoxRtcServer.ClientTest do
                         generation_id: "generation-signaling"
                       }
                     }}
+  end
+
+  test "rejects malformed speech context instead of fabricating a typed value" do
+    malformed =
+      Google.Protobuf.from_map(%{
+        "schema_version" => 2,
+        "status" => "complete",
+        "emotions" => [],
+        "vocal" => [],
+        "sounds" => [
+          %{
+            "label" => "fireworks",
+            "start_ms" => 0,
+            "end_ms" => 960,
+            "score" => 1.1
+          }
+        ]
+      })
+
+    assert SpeechContext.decode(malformed) == nil
   end
 
   test "an attach timeout tears down the stream and returns an error", %{client: client} do
@@ -589,5 +651,13 @@ defmodule VoxRtcServer.ClientTest do
     send_server(receiver, stream, %Vox.RtcControlServerMessage{
       msg: {:conversation, %Vox.ConverseServerMessage{msg: {kind, payload}}}
     })
+  end
+
+  defp speech_context_fixture do
+    __DIR__
+    |> Path.join("../../../fixtures/speech-context-v2.json")
+    |> File.read!()
+    |> Jason.decode!()
+    |> Google.Protobuf.from_map()
   end
 end

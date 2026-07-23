@@ -128,7 +128,7 @@ pub struct TranscriptEvent {
     pub topics: Option<Vec<String>>,
     pub entities: Vec<TranscriptEntity>,
     pub words: Vec<TranscriptWord>,
-    pub speech_context: Option<EventData>,
+    pub speech_context: Option<SpeechContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +145,106 @@ pub struct TranscriptWord {
     pub start_ms: f64,
     pub end_ms: f64,
     pub confidence: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechContextStatus {
+    Complete,
+    Partial,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechContextTrack {
+    Speaker,
+    Sounds,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpeechContextSpan {
+    pub label: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpeechContextSoundSpan {
+    #[serde(flatten)]
+    pub span: SpeechContextSpan,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpeechContext {
+    pub schema_version: u8,
+    pub status: SpeechContextStatus,
+    #[serde(default)]
+    pub emotions: Option<Vec<SpeechContextSpan>>,
+    #[serde(default)]
+    pub vocal: Option<Vec<SpeechContextSpan>>,
+    #[serde(default)]
+    pub sounds: Option<Vec<SpeechContextSoundSpan>>,
+    #[serde(default)]
+    pub unavailable: Option<Vec<SpeechContextTrack>>,
+}
+
+impl SpeechContext {
+    pub(crate) fn is_valid(&self) -> bool {
+        if self.schema_version != 2
+            || !self
+                .emotions
+                .iter()
+                .flatten()
+                .all(|span| !span.label.is_empty() && span.end_ms > span.start_ms)
+            || !self
+                .vocal
+                .iter()
+                .flatten()
+                .all(|span| !span.label.is_empty() && span.end_ms > span.start_ms)
+            || !self.sounds.iter().flatten().all(|sound| {
+                !sound.span.label.is_empty()
+                    && sound.span.end_ms > sound.span.start_ms
+                    && sound.score.is_finite()
+                    && (0.0..=1.0).contains(&sound.score)
+            })
+        {
+            return false;
+        }
+        let unavailable = self.unavailable.as_deref().unwrap_or_default();
+        let unique = unavailable
+            .iter()
+            .enumerate()
+            .all(|(index, track)| !unavailable[..index].contains(track));
+        if !unique {
+            return false;
+        }
+        let speaker_unavailable = unavailable.contains(&SpeechContextTrack::Speaker);
+        let sounds_unavailable = unavailable.contains(&SpeechContextTrack::Sounds);
+        match self.status {
+            SpeechContextStatus::Complete => {
+                self.emotions.is_some()
+                    && self.vocal.is_some()
+                    && self.sounds.is_some()
+                    && self.unavailable.is_none()
+            }
+            SpeechContextStatus::Partial => {
+                unavailable.len() == 1
+                    && speaker_unavailable == self.emotions.is_none()
+                    && speaker_unavailable == self.vocal.is_none()
+                    && sounds_unavailable == self.sounds.is_none()
+            }
+            SpeechContextStatus::Failed => {
+                unavailable.len() == 2
+                    && speaker_unavailable
+                    && sounds_unavailable
+                    && self.emotions.is_none()
+                    && self.vocal.is_none()
+                    && self.sounds.is_none()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

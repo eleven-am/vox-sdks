@@ -129,6 +129,41 @@ type TranscriptWord struct {
 	Confidence *float64
 }
 
+type SpeechContextStatus string
+
+const (
+	SpeechContextComplete SpeechContextStatus = "complete"
+	SpeechContextPartial  SpeechContextStatus = "partial"
+	SpeechContextFailed   SpeechContextStatus = "failed"
+)
+
+type SpeechContextTrack string
+
+const (
+	SpeechContextSpeaker SpeechContextTrack = "speaker"
+	SpeechContextSounds  SpeechContextTrack = "sounds"
+)
+
+type SpeechContextSpan struct {
+	Label   string `json:"label"`
+	StartMS int64  `json:"start_ms"`
+	EndMS   int64  `json:"end_ms"`
+}
+
+type SpeechContextSoundSpan struct {
+	SpeechContextSpan
+	Score float64 `json:"score"`
+}
+
+type SpeechContext struct {
+	SchemaVersion int                      `json:"schema_version"`
+	Status        SpeechContextStatus      `json:"status"`
+	Emotions      []SpeechContextSpan      `json:"emotions,omitempty"`
+	Vocal         []SpeechContextSpan      `json:"vocal,omitempty"`
+	Sounds        []SpeechContextSoundSpan `json:"sounds,omitempty"`
+	Unavailable   []SpeechContextTrack     `json:"unavailable,omitempty"`
+}
+
 type TranscriptEvent struct {
 	SessionID      string
 	ChannelName    string
@@ -141,7 +176,7 @@ type TranscriptEvent struct {
 	Topics         []string
 	Entities       []TranscriptEntity
 	Words          []TranscriptWord
-	SpeechContext  map[string]interface{}
+	SpeechContext  *SpeechContext
 }
 
 type TurnStateEvent struct {

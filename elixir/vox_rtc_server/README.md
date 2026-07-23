@@ -82,7 +82,31 @@ end
 ```
 
 Speech context is opt-in and final-only. The value is Vox's versioned prosody
-and dynamic audio-event object carried as a `google.protobuf.Struct`.
+and audio-event result decoded from `google.protobuf.Struct` into
+`VoxRtcServer.SpeechContext`.
+
+Schema v2 exposes timestamped `emotions` and `vocal` speaker spans plus
+environmental `sounds`. Sound spans also contain a model `score` from 0 to 1:
+
+```elixir
+case event.payload.speech_context do
+  %VoxRtcServer.SpeechContext{} = context ->
+    Enum.each(context.emotions || [], fn span ->
+      IO.inspect({:emotion, span.label, span.start_ms, span.end_ms})
+    end)
+
+    Enum.each(context.sounds || [], fn sound ->
+      IO.inspect({:sound, sound.label, sound.score})
+    end)
+
+  nil ->
+    :ok
+end
+```
+
+A `:partial` result identifies the unavailable `:speaker` or `:sounds` track;
+a `:failed` result identifies both. Unsupported or malformed context is
+decoded as `nil` without dropping the transcript event.
 
 An application can explicitly manage subscriptions:
 

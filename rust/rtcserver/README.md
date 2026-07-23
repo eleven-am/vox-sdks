@@ -23,8 +23,29 @@ controlled.session.configure(SessionConfig {
 Pass the API key in `VoxRtcServerClientOptions` or set `VOX_API_KEY`.
 
 Speech context is opt-in and final-only. When enabled,
-`TranscriptEvent.speech_context` contains Vox's versioned prosody and dynamic
-audio-event object; otherwise it is `None`.
+`TranscriptEvent.speech_context` contains a typed `SpeechContext`; otherwise it
+is `None`. Schema v2 exposes timestamped `emotions` and `vocal` speaker spans
+plus environmental `sounds`. Each sound also carries a score from 0 to 1.
+
+```rust
+use vox_rtc_server::SpeechContextStatus;
+
+if let Some(context) = transcript.speech_context.as_ref() {
+    for emotion in context.emotions.iter().flatten() {
+        println!("emotion={} {}..{}", emotion.label, emotion.start_ms, emotion.end_ms);
+    }
+    for sound in context.sounds.iter().flatten() {
+        println!("sound={} score={}", sound.span.label, sound.score);
+    }
+    if context.status != SpeechContextStatus::Complete {
+        println!("unavailable={:?}", context.unavailable);
+    }
+}
+```
+
+A partial result identifies the unavailable `Speaker` or `Sounds` track; a
+failed result identifies both. Unsupported or malformed context is decoded as
+`None` without dropping the transcript event.
 
 ## Responses and generation correlation
 

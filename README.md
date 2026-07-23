@@ -28,6 +28,14 @@ WebRTC ICE path. The application server never relays PCM.
 See `typescript/examples/express-rtc-proxy` for a complete browser gateway
 example.
 
+## Speech context
+
+The five server SDKs expose final-turn speech context as native language types,
+not unstructured maps. Schema v2 contains timestamped speaker `emotions` and
+`vocal` events plus scored environmental `sounds`. All implementations validate
+the same canonical fixture at `fixtures/speech-context-v2.json`; malformed or
+unsupported enrichment is omitted without dropping the transcript itself.
+
 ## Security boundary
 
 Browser code receives public ICE configuration only. It never receives the

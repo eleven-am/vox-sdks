@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -10,6 +11,13 @@ import {
   VoxRtcChannelJoinError,
   VoxRtcServerClient,
 } from "../src/index.js";
+
+const speechContextFixture = JSON.parse(
+  readFileSync(
+    new URL("../../../fixtures/speech-context-v2.json", import.meta.url),
+    "utf8",
+  ),
+) as Record<string, unknown>;
 
 class FakeChannel {
   sent: Array<{ event: string; payload: Record<string, unknown> }> = [];
@@ -336,7 +344,7 @@ test("named event hooks map common Vox events", async () => {
     end_ms: 20,
     eou_probability: 0.7,
     topics: ["hello"],
-    speech_context: { schema_version: 1, status: "complete" },
+    speech_context: speechContextFixture,
     session_id: "rtc_123",
   });
   fakeSocket.channel.emit("turn.state_changed", {
@@ -377,7 +385,7 @@ test("named event hooks map common Vox events", async () => {
       end_ms: 20,
       eou_probability: 0.7,
       topics: ["hello"],
-      speech_context: { schema_version: 1, status: "complete" },
+      speech_context: speechContextFixture,
       session_id: "rtc_123",
     },
     transcript: "hello world",
@@ -388,7 +396,16 @@ test("named event hooks map common Vox events", async () => {
     topics: ["hello"],
     entities: undefined,
     words: undefined,
-    speechContext: { schema_version: 1, status: "complete" },
+    speechContext: {
+      schemaVersion: 2,
+      status: "complete",
+      emotions: [{ label: "surprised", startMs: 0, endMs: 2500 }],
+      vocal: [{ label: "laughter", startMs: 7000, endMs: 10500 }],
+      sounds: [
+        { label: "fireworks", startMs: 3360, endMs: 4320, score: 0.42 },
+        { label: "inside, small room", startMs: 3840, endMs: 5280, score: 0.31 },
+      ],
+    },
   }]);
   assert.deepEqual(turns, [{
     sessionId: "rtc_123",
@@ -612,6 +629,28 @@ test("onTranscript maps entities and words when the server supplies them", async
     { word: "call", startMs: 0, endMs: 100, confidence: 0.9 },
     { word: "alice", startMs: 100, endMs: 250, confidence: undefined },
   ]);
+});
+
+test("onTranscript preserves the transcript but rejects malformed speech context", async () => {
+  const { fakeSocket, session } = await attachedSession();
+  const events: Array<{ transcript: string; speechContext?: unknown }> = [];
+  const off = session.onTranscript((event) => events.push(event));
+
+  fakeSocket.channel.emit("conversation.item.input_audio_transcription.completed", {
+    transcript: "still delivered",
+    speech_context: {
+      schema_version: 2,
+      status: "complete",
+      emotions: [],
+      vocal: [],
+      sounds: [{ label: "fireworks", start_ms: 0, end_ms: 960, score: 1.1 }],
+    },
+    session_id: "rtc_123",
+  });
+  off();
+
+  assert.equal(events[0]?.transcript, "still delivered");
+  assert.equal(events[0]?.speechContext, undefined);
 });
 
 test("interruption events map the confirmation/rejection reason", async () => {

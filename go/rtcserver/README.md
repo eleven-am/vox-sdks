@@ -137,6 +137,30 @@ text. Both interruption callbacks (`OnInterruptionDetected`,
 `OnInterruptionFalsePositive`) carry the server's `Reason` slug.
 
 `SpeechContext` is populated only on final transcript events when the session
-configuration explicitly enables it. It contains Vox's versioned prosody and
-dynamic audio-event object. The pointer configuration preserves the difference
-between omitted and explicitly disabled.
+configuration explicitly enables it. Schema v2 exposes typed `Emotions` and
+`Vocal` speaker spans plus environmental `Sounds`; every sound has a `Score`
+from 0 to 1.
+
+```go
+session.OnTranscript(func(event rtcserver.TranscriptEvent) {
+	if event.SpeechContext == nil {
+		return
+	}
+	for _, emotion := range event.SpeechContext.Emotions {
+		log.Printf("emotion=%s start=%d end=%d", emotion.Label, emotion.StartMS, emotion.EndMS)
+	}
+	for _, sound := range event.SpeechContext.Sounds {
+		log.Printf("sound=%s score=%.3f", sound.Label, sound.Score)
+	}
+	if event.SpeechContext.Status != rtcserver.SpeechContextComplete {
+		log.Printf("unavailable=%v", event.SpeechContext.Unavailable)
+	}
+})
+```
+
+`SpeechContextPartial` identifies the unavailable
+`SpeechContextSpeaker` or `SpeechContextSounds` track;
+`SpeechContextFailed` identifies both. Unsupported or malformed context is
+decoded as `nil` without dropping the transcript event. The pointer session
+configuration preserves the difference between omitted and explicitly
+disabled.
