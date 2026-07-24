@@ -56,6 +56,19 @@ that arrive before the matching answer are buffered and applied in order.
 After negotiation, media flows directly between the browser and Vox. The
 application gateway does not relay audio.
 
+`connect()` resolves only after the peer connection reports that media is
+connected. Receiving an SDP answer is not treated as call readiness. If the
+peer fails, closes, or does not connect within 15 seconds, `connect()` rejects
+and releases the microphone, peer connection, and signaling socket. Configure
+that independent media deadline when needed:
+
+```ts
+const client = new VoxRtcBrowserClient({
+  signalingEndpoint: "/api/vox/rtc",
+  mediaConnectionTimeoutMs: 20_000,
+});
+```
+
 Use a real ICE restart when the network path changes:
 
 ```ts

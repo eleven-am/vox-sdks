@@ -33,6 +33,23 @@ const DEFAULT_AUDIO_DUCKING_CONFIG: NormalizedAudioDuckingConfig = {
   releaseDelayMs: 350,
 };
 
+const DEFAULT_MEDIA_CONNECTION_TIMEOUT_MS = 15_000;
+
+class MediaConnectionCancelledError extends Error {
+  constructor() {
+    super("RTC media connection attempt was cancelled");
+    this.name = "MediaConnectionCancelledError";
+  }
+}
+
+type MediaConnectionWait = {
+  attempt: number;
+  peerConnection: RTCPeerConnection;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 const DUCKING_VOX_START_EVENTS = new Set([
   "input_audio_buffer.speech_started",
   "interruption.detected",
@@ -152,6 +169,7 @@ function stopStream(stream: MediaStream | null): void {
 export class VoxRtcBrowserClient {
   readonly #signalingEndpoint: string;
   readonly #signalingTimeoutMs?: number;
+  readonly #mediaConnectionTimeoutMs: number;
   readonly #webSocketFactory?: WebSocketFactory;
   readonly #peerConnectionFactory: PeerConnectionFactory;
   readonly #getUserMedia: GetUserMedia;
@@ -178,6 +196,8 @@ export class VoxRtcBrowserClient {
   #audioDuckingReleaseTimer: ReturnType<typeof setTimeout> | null = null;
   #audioDuckingBaseVolume: number | null = null;
   #audioDuckingVoxActive = false;
+  #connectionAttempt = 0;
+  #mediaConnectionWait: MediaConnectionWait | null = null;
 
   constructor(options: VoxRtcBrowserClientOptions) {
     if (!options.signalingEndpoint.startsWith("/") || options.signalingEndpoint.startsWith("//")) {
@@ -185,6 +205,9 @@ export class VoxRtcBrowserClient {
     }
     this.#signalingEndpoint = options.signalingEndpoint;
     this.#signalingTimeoutMs = options.signalingTimeoutMs;
+    this.#mediaConnectionTimeoutMs = this.#normalizeMediaConnectionTimeout(
+      options.mediaConnectionTimeoutMs,
+    );
     this.#webSocketFactory = options.webSocketFactory;
     this.#peerConnectionFactory = options.peerConnectionFactory ?? defaultPeerConnectionFactory;
     this.#getUserMedia = options.getUserMedia ?? defaultGetUserMedia;
@@ -239,6 +262,7 @@ export class VoxRtcBrowserClient {
     if (this.#status === "connected" || this.#status === "connecting") {
       throw new Error(`Vox RTC client is already ${this.#status}`);
     }
+    const attempt = ++this.#connectionAttempt;
     this.#setStatus("connecting");
     try {
       const signaling = new GatewaySignalingClient({
@@ -251,6 +275,7 @@ export class VoxRtcBrowserClient {
       });
       this.#signaling = signaling;
       const session = await signaling.connect();
+      this.#assertActiveConnectionAttempt(attempt);
       this.#session = session;
       this.#emit("session", session);
 
@@ -265,6 +290,10 @@ export class VoxRtcBrowserClient {
       const audioConstraints = options.audioConstraints ?? this.#defaultAudioConstraints;
       if (audioConstraints !== false) {
         const localStream = await this.#getUserMedia({ audio: audioConstraints });
+        if (!this.#isActiveConnectionAttempt(attempt)) {
+          stopStream(localStream);
+          throw new MediaConnectionCancelledError();
+        }
         this.#localStream = localStream;
         for (const track of localStream.getAudioTracks()) {
           pc.addTrack(track, localStream);
@@ -272,17 +301,32 @@ export class VoxRtcBrowserClient {
         this.#emit("localStream", localStream);
       }
 
-      await this.#negotiate({ restart: false });
+      const mediaConnected = this.#waitForMediaConnection(pc, attempt);
+      await Promise.all([
+        this.#negotiate({ restart: false }),
+        mediaConnected,
+      ]);
+      this.#assertActiveConnectionAttempt(attempt);
       this.#setStatus("connected");
       return session;
     } catch (error) {
-      this.#emit("error", error instanceof Error ? error : new Error(String(error)));
-      await this.disconnect();
-      throw error;
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      if (this.#connectionAttempt === attempt) {
+        this.#connectionAttempt += 1;
+        this.#rejectMediaConnectionWait(normalized);
+        if (!(normalized instanceof MediaConnectionCancelledError)) {
+          this.#emit("error", normalized);
+        }
+        this.#cleanup();
+        this.#setStatus("closed");
+      }
+      throw normalized;
     }
   }
 
   async disconnect(): Promise<void> {
+    this.#connectionAttempt += 1;
+    this.#rejectMediaConnectionWait(new MediaConnectionCancelledError());
     if (this.#status === "closed" || this.#status === "idle") {
       this.#cleanup();
       this.#setStatus("closed");
@@ -370,7 +414,7 @@ export class VoxRtcBrowserClient {
       }
       this.#sendLocalCandidate(candidate);
     };
-    pc.onconnectionstatechange = () => this.#emitState();
+    pc.onconnectionstatechange = () => this.#handlePeerConnectionStateChange(pc);
     pc.oniceconnectionstatechange = () => this.#emitState();
   }
 
@@ -519,9 +563,114 @@ export class VoxRtcBrowserClient {
     if (this.#status === "disconnecting" || this.#status === "closed" || this.#status === "idle") {
       return;
     }
-    this.#emit("error", new Error(`RTC gateway closed unexpectedly: ${reason}`));
+    const error = new Error(`RTC gateway closed unexpectedly: ${reason}`);
+    this.#connectionAttempt += 1;
+    this.#rejectMediaConnectionWait(error);
+    this.#emit("error", error);
     this.#cleanup();
     this.#setStatus("closed");
+  }
+
+  #handlePeerConnectionStateChange(pc: RTCPeerConnection): void {
+    this.#emitState();
+    if (pc !== this.#peerConnection) {
+      return;
+    }
+    if (pc.connectionState === "connected") {
+      this.#resolveMediaConnectionWait(pc);
+      return;
+    }
+    if (pc.connectionState !== "failed" && pc.connectionState !== "closed") {
+      return;
+    }
+
+    const error = new Error(`RTC media connection ${pc.connectionState}`);
+    if (this.#status === "connecting") {
+      this.#rejectMediaConnectionWait(error);
+      return;
+    }
+    if (this.#status === "connected") {
+      this.#connectionAttempt += 1;
+      this.#emit("error", error);
+      this.#cleanup();
+      this.#setStatus("closed");
+    }
+  }
+
+  #waitForMediaConnection(pc: RTCPeerConnection, attempt: number): Promise<void> {
+    if (this.#mediaConnectionWait !== null) {
+      throw new Error("RTC media connection wait is already active");
+    }
+    if (pc.connectionState === "connected") {
+      return Promise.resolve();
+    }
+    if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+      return Promise.reject(new Error(`RTC media connection ${pc.connectionState}`));
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#rejectMediaConnectionWait(
+          new Error(
+            `RTC media connection timed out after ${this.#mediaConnectionTimeoutMs}ms`,
+          ),
+        );
+      }, this.#mediaConnectionTimeoutMs);
+      this.#mediaConnectionWait = {
+        attempt,
+        peerConnection: pc,
+        resolve,
+        reject,
+        timer,
+      };
+
+      // The peer may have changed state between the checks above and waiter registration.
+      this.#handlePeerConnectionStateChange(pc);
+    });
+  }
+
+  #resolveMediaConnectionWait(pc: RTCPeerConnection): void {
+    const wait = this.#mediaConnectionWait;
+    if (
+      wait === null
+      || wait.peerConnection !== pc
+      || wait.attempt !== this.#connectionAttempt
+    ) {
+      return;
+    }
+    this.#mediaConnectionWait = null;
+    clearTimeout(wait.timer);
+    wait.resolve();
+  }
+
+  #rejectMediaConnectionWait(error: Error): void {
+    const wait = this.#mediaConnectionWait;
+    if (wait === null) {
+      return;
+    }
+    this.#mediaConnectionWait = null;
+    clearTimeout(wait.timer);
+    wait.reject(error);
+  }
+
+  #isActiveConnectionAttempt(attempt: number): boolean {
+    return attempt === this.#connectionAttempt && this.#status === "connecting";
+  }
+
+  #assertActiveConnectionAttempt(attempt: number): void {
+    if (!this.#isActiveConnectionAttempt(attempt)) {
+      throw new MediaConnectionCancelledError();
+    }
+  }
+
+  #normalizeMediaConnectionTimeout(value: number | undefined): number {
+    if (value === undefined) {
+      return DEFAULT_MEDIA_CONNECTION_TIMEOUT_MS;
+    }
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error("mediaConnectionTimeoutMs must be a positive finite number");
+    }
+    return value;
   }
 
   #handleAudioDuckingControlEvent(event: VoxRtcControlEventLike): void {
@@ -617,6 +766,7 @@ export class VoxRtcBrowserClient {
   }
 
   #cleanup(): void {
+    this.#rejectMediaConnectionWait(new MediaConnectionCancelledError());
     this.#stopAudioDucking();
     const signaling = this.#signaling;
     this.#signaling = null;

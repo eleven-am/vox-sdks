@@ -30,6 +30,13 @@ function defaultWebSocketFactory(url: string): WebSocketLike {
   return new WebSocket(url);
 }
 
+function detachSocketHandlers(socket: WebSocketLike): void {
+  socket.onopen = null;
+  socket.onmessage = null;
+  socket.onerror = null;
+  socket.onclose = null;
+}
+
 function validateEndpoint(endpoint: string): string {
   if (!endpoint.startsWith("/") || endpoint.startsWith("//")) {
     throw new Error("RTC signalingEndpoint must be a same-origin path");
@@ -194,6 +201,7 @@ export class GatewaySignalingClient {
         rejectReady(error);
         this.#rejectPending(error);
         this.#socket = null;
+        detachSocketHandlers(socket);
         if (!this.#closed) this.#onClose(reason);
       };
     });
@@ -244,8 +252,12 @@ export class GatewaySignalingClient {
       try {
         this.#send(this.#id("close"), "rtc.close", { reason });
       } catch {}
+      detachSocketHandlers(socket);
       socket.close(1000, reason);
     } else {
+      if (socket) {
+        detachSocketHandlers(socket);
+      }
       socket?.close(1000, reason);
     }
     this.#socket = null;

@@ -10,6 +10,7 @@ export interface VoxRtcBrowserSessionBootstrap {
 export interface VoxRtcBrowserClientOptions {
   signalingEndpoint: string;
   signalingTimeoutMs?: number;
+  mediaConnectionTimeoutMs?: number;
   webSocketFactory?: WebSocketFactory;
   peerConnectionFactory?: PeerConnectionFactory;
   getUserMedia?: GetUserMedia;

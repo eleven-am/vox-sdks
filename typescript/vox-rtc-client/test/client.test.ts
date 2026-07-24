@@ -97,7 +97,10 @@ class MockPeerConnection {
     replaceTrack: (track: unknown) => Promise<void>;
   }> = [];
 
-  constructor(readonly configuration: RTCConfiguration) {
+  constructor(
+    readonly configuration: RTCConfiguration,
+    readonly autoConnect = true,
+  ) {
     MockPeerConnection.instances.push(this);
   }
   createDataChannel() {
@@ -139,12 +142,24 @@ class MockPeerConnection {
   }
   async setRemoteDescription(description: RTCSessionDescriptionInit) {
     this.remoteDescription = description;
+    if (this.autoConnect) {
+      queueMicrotask(() => this.setConnectionState("connected", "connected"));
+    }
   }
   async addIceCandidate(candidate: RTCIceCandidateInit | null) {
     this.candidates.push(candidate);
   }
   close() {
     this.closed = true;
+  }
+  setConnectionState(
+    connectionState: RTCPeerConnectionState,
+    iceConnectionState: RTCIceConnectionState = this.iceConnectionState,
+  ) {
+    this.connectionState = connectionState;
+    this.iceConnectionState = iceConnectionState;
+    this.oniceconnectionstatechange?.();
+    this.onconnectionstatechange?.();
   }
 }
 
@@ -209,6 +224,7 @@ function createHarness(
     readyData?: Record<string, unknown>;
     onSocket?: (socket: MockWebSocket) => void;
     client?: Partial<ConstructorParameters<typeof VoxRtcBrowserClient>[0]>;
+    autoConnect?: boolean;
   } = {},
 ) {
   MockPeerConnection.instances = [];
@@ -219,7 +235,10 @@ function createHarness(
     signalingEndpoint: "/api/vox/rtc",
     signalingTimeoutMs: 250,
     peerConnectionFactory: (configuration) =>
-      new MockPeerConnection(configuration) as unknown as RTCPeerConnection,
+      new MockPeerConnection(
+        configuration,
+        options.autoConnect ?? true,
+      ) as unknown as RTCPeerConnection,
     getUserMedia: async () => stream as unknown as MediaStream,
     webSocketFactory: (url) => {
       const socket = new MockWebSocket(url);
@@ -231,6 +250,26 @@ function createHarness(
     ...options.client,
   });
   return { client, sockets, stream };
+}
+
+function assertPeerReleased(pc: MockPeerConnection): void {
+  assert.equal(pc.closed, true);
+  assert.equal(pc.ontrack, null);
+  assert.equal(pc.ondatachannel, null);
+  assert.equal(pc.onicecandidate, null);
+  assert.equal(pc.onconnectionstatechange, null);
+  assert.equal(pc.oniceconnectionstatechange, null);
+  assert.equal(pc.dataChannel.onopen, null);
+  assert.equal(pc.dataChannel.onclose, null);
+  assert.equal(pc.dataChannel.onerror, null);
+  assert.equal(pc.dataChannel.onmessage, null);
+}
+
+function assertSignalingReleased(socket: MockWebSocket): void {
+  assert.equal(socket.onopen, null);
+  assert.equal(socket.onmessage, null);
+  assert.equal(socket.onerror, null);
+  assert.equal(socket.onclose, null);
 }
 
 function answerOffers(
@@ -309,6 +348,148 @@ test("connect uses one same-origin WebSocket and performs full trickle in order"
   ]);
   assert.equal(JSON.stringify(session).includes("capability"), false);
   await client.disconnect();
+});
+
+test("connect remains pending after SDP until the peer connection is connected", async () => {
+  const { client } = createHarness({
+    onSocket: answerOffers,
+    autoConnect: false,
+  });
+  let settled = false;
+  const connecting = client.connect();
+  void connecting.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+
+  await delay();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+  assert.equal(pc.remoteDescription?.sdp, "answer-sdp");
+  assert.equal(pc.connectionState, "new");
+  assert.equal(client.state.status, "connecting");
+  assert.equal(settled, false);
+
+  pc.setConnectionState("connected", "connected");
+  await connecting;
+  assert.equal(client.state.status, "connected");
+  await client.disconnect();
+});
+
+test("peer failure before media connection rejects connect and releases resources", async () => {
+  const { client, sockets, stream } = createHarness({
+    onSocket: answerOffers,
+    autoConnect: false,
+  });
+  const connecting = client.connect();
+  const rejected = assert.rejects(connecting, /RTC media connection failed/);
+  await delay();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+
+  pc.setConnectionState("failed", "failed");
+  await rejected;
+
+  assert.equal(client.state.status, "closed");
+  assert.equal(stream.stopped, true);
+  const socket = itemAt(sockets, 0, "gateway socket");
+  assert.equal(socket.readyState, 3);
+  assertSignalingReleased(socket);
+  assertPeerReleased(pc);
+});
+
+test("peer close before media connection rejects connect and releases resources", async () => {
+  const { client, sockets, stream } = createHarness({
+    onSocket: answerOffers,
+    autoConnect: false,
+  });
+  const connecting = client.connect();
+  const rejected = assert.rejects(connecting, /RTC media connection closed/);
+  await delay();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+
+  pc.setConnectionState("closed", "closed");
+  await rejected;
+
+  assert.equal(client.state.status, "closed");
+  assert.equal(stream.stopped, true);
+  assertSignalingReleased(itemAt(sockets, 0, "gateway socket"));
+  assertPeerReleased(pc);
+});
+
+test("media connection timeout rejects connect and releases resources", async () => {
+  const { client, sockets, stream } = createHarness({
+    onSocket: answerOffers,
+    autoConnect: false,
+    client: { mediaConnectionTimeoutMs: 10 },
+  });
+
+  await assert.rejects(client.connect(), /RTC media connection timed out after 10ms/);
+
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+  assert.equal(client.state.status, "closed");
+  assert.equal(stream.stopped, true);
+  const socket = itemAt(sockets, 0, "gateway socket");
+  assert.equal(socket.readyState, 3);
+  assertSignalingReleased(socket);
+  assertPeerReleased(pc);
+});
+
+test("signaling close while media connection is pending rejects without hanging", async () => {
+  const { client, sockets, stream } = createHarness({
+    onSocket: answerOffers,
+    autoConnect: false,
+  });
+  const connecting = client.connect();
+  const rejected = assert.rejects(connecting, /RTC gateway closed unexpectedly: server_failed/);
+  await delay();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+
+  const socket = itemAt(sockets, 0, "gateway socket");
+  socket.close(1011, "server_failed");
+  await rejected;
+
+  assert.equal(client.state.status, "closed");
+  assert.equal(stream.stopped, true);
+  assertSignalingReleased(socket);
+  assertPeerReleased(pc);
+});
+
+test("disconnect while media connection is pending cancels connect and releases resources", async () => {
+  const { client, sockets, stream } = createHarness({
+    onSocket: answerOffers,
+    autoConnect: false,
+  });
+  const connecting = client.connect();
+  const rejected = assert.rejects(connecting, /RTC media connection attempt was cancelled/);
+  await delay();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+
+  await client.disconnect();
+  await rejected;
+
+  assert.equal(client.state.status, "closed");
+  assert.equal(stream.stopped, true);
+  assertSignalingReleased(itemAt(sockets, 0, "gateway socket"));
+  assertPeerReleased(pc);
+});
+
+test("connected peer failure is terminal instead of leaving stale connected status", async () => {
+  const { client, sockets, stream } = createHarness({ onSocket: answerOffers });
+  const errors: string[] = [];
+  client.on("error", (error) => errors.push(error.message));
+  await client.connect();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+
+  pc.setConnectionState("failed", "failed");
+
+  assert.equal(client.state.status, "closed");
+  assert.equal(stream.stopped, true);
+  assert.deepEqual(errors, ["RTC media connection failed"]);
+  assertSignalingReleased(itemAt(sockets, 0, "gateway socket"));
+  assertPeerReleased(pc);
 });
 
 test("gateway events queued before ready are replayed after session setup", async () => {
