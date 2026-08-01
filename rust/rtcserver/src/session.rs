@@ -441,6 +441,40 @@ impl VoxRtcControlSession {
         self.channel.send_message(event, payload).await
     }
 
+    pub async fn send_offer(
+        &self,
+        offer: Value,
+        restart: bool,
+        generation: Option<u64>,
+    ) -> Result<()> {
+        let mut payload = EventData::new();
+        payload.insert("offer".to_owned(), offer);
+        payload.insert("restart".to_owned(), Value::Bool(restart));
+        if let Some(generation) = generation {
+            payload.insert("generation".to_owned(), Value::from(generation));
+        }
+        self.send_control("rtc.offer", payload).await
+    }
+
+    pub async fn send_ice_candidate(
+        &self,
+        candidate: Option<Value>,
+        generation: Option<u64>,
+    ) -> Result<()> {
+        let mut payload = EventData::new();
+        payload.insert("candidate".to_owned(), candidate.unwrap_or(Value::Null));
+        if let Some(generation) = generation {
+            payload.insert("generation".to_owned(), Value::from(generation));
+        }
+        self.send_control("rtc.ice_candidate", payload).await
+    }
+
+    pub async fn close_rtc(&self, reason: impl Into<String>) -> Result<()> {
+        let mut payload = EventData::new();
+        payload.insert("reason".to_owned(), Value::String(reason.into()));
+        self.send_control("rtc.close", payload).await
+    }
+
     pub async fn configure(&self, config: SessionConfig) -> Result<()> {
         let mut payload = EventData::new();
         payload.insert(

@@ -456,7 +456,7 @@ defmodule VoxRtcServer.ClientTest do
 
     assert_receive {:vox_rtc, ^session,
                     %Event{
-                      type: :error,
+                      type: :signaling_error,
                       payload: %ErrorEvent{
                         message: "Offer generation is stale",
                         code: "response_stale_generation",

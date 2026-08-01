@@ -655,6 +655,34 @@ class VoxRtcControlSession:
     ) -> None:
         self._channel.send_message(event, dict(payload or {}))
 
+    def send_offer(
+        self,
+        offer: Mapping[str, Any],
+        *,
+        restart: bool = False,
+        generation: int | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {"offer": dict(offer), "restart": restart}
+        if generation is not None:
+            payload["generation"] = generation
+        self.send_control("rtc.offer", payload)
+
+    def send_ice_candidate(
+        self,
+        candidate: Mapping[str, Any] | None,
+        *,
+        generation: int | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "candidate": None if candidate is None else dict(candidate)
+        }
+        if generation is not None:
+            payload["generation"] = generation
+        self.send_control("rtc.ice_candidate", payload)
+
+    def close_rtc(self, reason: str = "client_closed") -> None:
+        self.send_control("rtc.close", {"reason": reason})
+
     def configure(self, config: SessionConfig) -> None:
         session: dict[str, Any] = dict(config.extra)
         if config.stt_model is not None:

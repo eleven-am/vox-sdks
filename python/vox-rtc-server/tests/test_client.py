@@ -224,6 +224,45 @@ def test_attach_session_joins_and_sends_expected_control_messages() -> None:
     assert captured_params == {"api_key": "secret"}
 
 
+def test_signaling_commands_preserve_generation_and_candidate_completion() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="http://vox.test",
+        socket_factory=lambda *_args: fake_socket,
+    )
+    session = asyncio.run(client.attach_session("rtc_123"))
+
+    session.send_offer(
+        {"type": "offer", "sdp": "offer-sdp"}, generation=2, restart=True
+    )
+    session.send_ice_candidate(
+        {"candidate": "candidate:first", "sdpMLineIndex": 0}, generation=2
+    )
+    session.send_ice_candidate(None, generation=2)
+
+    assert fake_socket.channel.sent == [
+        (
+            "rtc.offer",
+            {
+                "offer": {"type": "offer", "sdp": "offer-sdp"},
+                "restart": True,
+                "generation": 2,
+            },
+        ),
+        (
+            "rtc.ice_candidate",
+            {
+                "candidate": {
+                    "candidate": "candidate:first",
+                    "sdpMLineIndex": 0,
+                },
+                "generation": 2,
+            },
+        ),
+        ("rtc.ice_candidate", {"candidate": None, "generation": 2}),
+    ]
+
+
 def test_streaming_response_commands_share_one_generation_id() -> None:
     fake_socket = FakeSocket()
     client = VoxRtcServerClient(

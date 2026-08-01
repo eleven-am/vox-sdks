@@ -20,13 +20,14 @@ WebRTC ICE path. The application server never relays PCM.
 
 - `typescript/vox-rtc-client`: browser media and same-origin gateway signaling
 - `typescript/vox-rtc-server`: PondSocket control and the application gateway
-- `python/vox-rtc-server`: PondSocket control
+- `python/vox-rtc-server`: PondSocket control and an ASGI gateway
 - `go/rtcserver`: PondSocket control
-- `rust/rtcserver`: PondSocket control
-- `elixir/vox_rtc_server`: native gRPC control
+- `rust/rtcserver`: PondSocket control and an Axum gateway
+- `elixir/vox_rtc_server`: native gRPC control and a Plug/WebSock gateway
 
-See `typescript/examples/express-rtc-proxy` for a complete browser gateway
-example.
+All five server SDKs can now terminate the browser-facing same-origin
+WebSocket. See each package README for its framework-native mounting API and
+`typescript/examples/express-rtc-proxy` for a complete application example.
 
 ## Speech context
 

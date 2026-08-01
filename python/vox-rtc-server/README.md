@@ -11,6 +11,38 @@ pip install vox-rtc-server
 
 Pass `api_key=...` or set `VOX_API_KEY`.
 
+## Browser WebSocket gateway
+
+`VoxRtcGateway` is a dependency-free ASGI application compatible with
+`@eleven-am/vox-rtc-client`. Mount it at the same-origin path used by the
+browser client:
+
+```python
+import os
+
+from vox_rtc_server import VoxRtcGateway
+
+app = VoxRtcGateway(
+    http_base="http://vox-service.vox.svc.cluster.local:11435",
+    api_key=os.environ.get("VOX_API_KEY"),
+    path="/api/vox/rtc",
+)
+```
+
+Serve `app` with Uvicorn, Hypercorn, Daphne, or mount it in a Starlette/FastAPI
+application. Each browser WebSocket creates and owns one controlled Vox
+session. The socket carries SDP, trickle ICE, and events for the lifetime of
+the call; microphone and assistant audio travel directly over WebRTC.
+
+Generated offer and candidate `generation` values, including the null
+end-of-candidates marker, are preserved exactly. The gateway accepts legacy
+generation-less negotiation until a generated offer is received. It never
+returns the Vox API key or internal Vox address to the browser.
+
+Use `on_session_created`, `on_session_closed`, and `on_error` for application
+ownership and cleanup. Hooks may be synchronous or asynchronous. ASGI lifespan
+shutdown closes active sessions and disconnects the shared control client.
+
 ## PondSocket session
 
 ```python

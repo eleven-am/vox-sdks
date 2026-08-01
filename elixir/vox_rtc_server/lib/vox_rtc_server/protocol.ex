@@ -187,7 +187,7 @@ defmodule VoxRtcServer.Protocol do
     do: decode_conversation_event(payload, session_id)
 
   defp decode_server_event(:error, payload, session_id),
-    do: event(:error, error_event(payload), session_id)
+    do: event(:signaling_error, error_event(payload), session_id)
 
   defp decode_server_event(:closed, payload, session_id),
     do: event(:closed, %{reason: payload.reason}, session_id)

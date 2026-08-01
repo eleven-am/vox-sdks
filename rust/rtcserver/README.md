@@ -22,6 +22,37 @@ controlled.session.configure(SessionConfig {
 
 Pass the API key in `VoxRtcServerClientOptions` or set `VOX_API_KEY`.
 
+## Browser WebSocket gateway
+
+The SDK includes an Axum router compatible with
+`@eleven-am/vox-rtc-client`:
+
+```rust
+use vox_rtc_server::{GatewayOptions, VoxRtcGateway};
+
+let mut options = GatewayOptions::new(
+    "http://vox-service.vox.svc.cluster.local:11435",
+);
+options.api_key = std::env::var("VOX_API_KEY").ok();
+options.path = "/api/vox/rtc".into();
+
+let gateway = VoxRtcGateway::new(options)?;
+let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+axum::serve(listener, gateway.router()).await?;
+```
+
+Each browser socket owns one controlled session. The socket remains open for
+SDP, full-trickle ICE, and lifecycle events while WebRTC carries media directly
+between the browser and Vox. Offer and candidate generations, including null
+end-of-candidates markers and stale generations, are forwarded unchanged.
+Legacy generation-less negotiation remains supported until a generated offer
+is received.
+
+Call `gateway.close("gateway_shutdown").await` during application shutdown.
+It signals active sockets, waits for their controlled sessions to close, and
+then disconnects the shared Vox client. `GatewayOptions` also provides async
+session-created/session-closed hooks and an error callback.
+
 Speech context is opt-in and final-only. When enabled,
 `TranscriptEvent.speech_context` contains a typed `SpeechContext`; otherwise it
 is `None`. Schema v2 exposes timestamped `emotions` and `vocal` speaker spans

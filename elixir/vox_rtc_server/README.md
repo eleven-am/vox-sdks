@@ -20,7 +20,7 @@ Add the package to `mix.exs`:
 ```elixir
 def deps do
   [
-    {:vox_rtc_server, "~> 0.2.3"}
+    {:vox_rtc_server, "~> 0.2.5"}
   ]
 end
 ```
@@ -39,6 +39,37 @@ children = [
 
 Supervisor.start_link(children, strategy: :one_for_one)
 ```
+
+## Browser WebSocket gateway
+
+Mount the provided Plug at the same-origin path used by
+`@eleven-am/vox-rtc-client`:
+
+```elixir
+plug VoxRtcServer.Gateway,
+  client: MyApp.Vox,
+  path: "/api/vox/rtc",
+  on_session_created: fn %{request: request, session: session} ->
+    MyApp.Calls.register(request, session)
+    :ok
+  end,
+  on_session_closed: fn %{session: session, reason: reason} ->
+    MyApp.Calls.unregister(session, reason)
+    :ok
+  end
+```
+
+The Plug uses `WebSockAdapter`, so it works with Plug-compatible servers that
+support WebSocket upgrades, including Bandit and Cowboy. Each upgraded browser
+socket creates and owns one controlled gRPC session. The socket carries SDP,
+full-trickle ICE, and lifecycle events for the whole call; WebRTC media flows
+directly between the browser and Vox.
+
+The gateway preserves offer and candidate generations, null candidate
+completion, and stale generations. Legacy generation-less negotiation remains
+compatible until a generated offer is received. It exposes request metadata to
+the lifecycle hooks but never returns the Vox credential or gRPC target to the
+browser.
 
 The target is the gRPC endpoint, not Vox's HTTP port. Omit `api_key` only when
 the Vox deployment does not require API authentication. Supply gRPC connection
@@ -211,8 +242,9 @@ buffer.
 
 ## Typed errors
 
-Signaling and conversation failures arrive as `:error` events whose payload is
-`%VoxRtcServer.ErrorEvent{}`. It contains `message`, stable `code`,
+Signaling failures arrive as `:signaling_error`; conversation failures arrive
+as `:error`. Both carry `%VoxRtcServer.ErrorEvent{}` payloads containing
+`message`, stable `code`,
 `recoverable`, and an optional `generation_id`. Known server error codes are
 available through `VoxRtcServer.ErrorEvent.known_codes/0` and
 `known_code?/1`.

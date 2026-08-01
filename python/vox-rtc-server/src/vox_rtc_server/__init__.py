@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .client import VoxRtcServerClient
+from .gateway import GatewayClosedContext, GatewaySessionContext, VoxRtcGateway
 from .session import VoxRtcControlSession
 from .types import (
     ERROR_CODE_COMMAND_INVALID,
@@ -43,7 +44,7 @@ from .types import (
     WireEvent,
 )
 
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 
 __all__ = [
     "ERROR_CODE_COMMAND_INVALID",
@@ -83,7 +84,10 @@ __all__ = [
     "TranscriptWord",
     "TurnEouPredictedEvent",
     "TurnStateEvent",
+    "GatewayClosedContext",
+    "GatewaySessionContext",
     "VoxRtcControlSession",
+    "VoxRtcGateway",
     "VoxRtcServerClient",
     "WireEvent",
     "__version__",

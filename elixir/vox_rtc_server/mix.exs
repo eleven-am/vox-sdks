@@ -1,7 +1,7 @@
 defmodule VoxRtcServer.MixProject do
   use Mix.Project
 
-  @version "0.2.4"
+  @version "0.2.5"
   @source_url "https://github.com/eleven-am/vox-sdks"
 
   def project do
@@ -32,7 +32,9 @@ defmodule VoxRtcServer.MixProject do
       {:castore, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:mint, "~> 1.9"},
+      {:plug, "~> 1.16"},
       {:protobuf, "~> 0.17"},
+      {:websock_adapter, "~> 0.6"},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false}
     ]
   end

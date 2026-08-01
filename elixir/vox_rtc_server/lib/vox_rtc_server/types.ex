@@ -448,6 +448,7 @@ defmodule VoxRtcServer.Event do
           | :answer
           | :ice_candidate
           | :ice_candidates_complete
+          | :signaling_error
           | :session_created
           | :speech_started
           | :speech_stopped
