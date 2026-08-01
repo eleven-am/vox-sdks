@@ -63,6 +63,12 @@ type RTCIceCandidate struct {
 	UsernameFragment *string `json:"usernameFragment"`
 }
 
+// RTCIceCandidateOptions scopes a trickled candidate to one RTC negotiation.
+// Generation is optional for compatibility with legacy, generation-less offers.
+type RTCIceCandidateOptions struct {
+	Generation *uint64
+}
+
 type SessionConfig struct {
 	STTModel      string                 `json:"-"`
 	TTSModel      string                 `json:"-"`

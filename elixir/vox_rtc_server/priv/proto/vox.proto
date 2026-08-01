@@ -337,6 +337,7 @@ message RtcSessionDescription {
 message RtcControlAnswer {
   string session_id = 1;
   RtcSessionDescription answer = 2;
+  optional uint64 generation = 3;
 }
 
 message RtcIceCandidate {
@@ -344,13 +345,17 @@ message RtcIceCandidate {
   optional string sdp_mid = 2;
   optional uint32 sdp_m_line_index = 3;
   optional string username_fragment = 4;
+  optional uint64 generation = 5;
 }
 
-message RtcIceCandidatesComplete {}
+message RtcIceCandidatesComplete {
+  optional uint64 generation = 1;
+}
 
 message RtcControlOffer {
   RtcSessionDescription offer = 1;
   bool restart = 2;
+  optional uint64 generation = 3;
 }
 
 message RtcControlClose {
@@ -367,6 +372,7 @@ message RtcSignalingError {
   string code = 2;
   bool recoverable = 3;
   string generation_id = 4;
+  optional uint64 generation = 5;
 }
 
 message RtcWireEvent {

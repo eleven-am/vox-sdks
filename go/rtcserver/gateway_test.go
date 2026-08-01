@@ -92,8 +92,36 @@ func TestGatewayForwardsTrickleSignalingAndRunsLifecycleHooks(t *testing.T) {
 	})
 	waitForSentEvent(t, channel, "rtc.offer")
 	forwardedGeneration := sentEventPayload(t, channel, "rtc.offer")["generation"]
-	if forwardedGeneration != float64(1) {
+	if forwardedGeneration != uint64(1) {
 		t.Fatalf("offer command did not forward the browser generation to vox: %#v", forwardedGeneration)
+	}
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "candidate-1", "type": "rtc.ice_candidate",
+		"data": map[string]interface{}{
+			"generation": float64(1),
+			"candidate": map[string]interface{}{
+				"candidate":     "candidate:browser",
+				"sdpMid":        "0",
+				"sdpMLineIndex": float64(0),
+			},
+		},
+	})
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "candidate-complete", "type": "rtc.ice_candidate",
+		"data": map[string]interface{}{"candidate": nil, "generation": float64(1)},
+	})
+	waitForSentEventCount(t, channel, "rtc.ice_candidate", 2)
+	candidates := sentEventPayloads(channel, "rtc.ice_candidate")
+	for index, payload := range candidates {
+		if payload["generation"] != uint64(1) {
+			t.Fatalf("candidate %d lost generation: %#v", index, payload)
+		}
+	}
+	if candidates[0]["candidate"].(*RTCIceCandidate).Candidate != "candidate:browser" {
+		t.Fatalf("regular candidate was not forwarded: %#v", candidates[0])
+	}
+	if candidates[1]["candidate"] != nil {
+		t.Fatalf("end-of-candidates marker was not forwarded: %#v", candidates[1])
 	}
 	channel.emit("rtc.answer", map[string]interface{}{
 		"answer":     map[string]interface{}{"type": "answer", "sdp": "v=0\r\n"},
@@ -125,6 +153,114 @@ func TestGatewayForwardsTrickleSignalingAndRunsLifecycleHooks(t *testing.T) {
 	defer hookMu.Unlock()
 	if created != 1 || closed != 1 {
 		t.Fatalf("unexpected lifecycle counts: created=%d closed=%d", created, closed)
+	}
+}
+
+func TestGatewayPreservesRestartAndStaleCandidateGenerations(t *testing.T) {
+	channel, connection, cleanup := dialGateway(t, GatewayOptions{Path: "/api/rtc"})
+	defer cleanup()
+	_ = readGatewayMessage(t, connection)
+
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "offer-1", "type": "rtc.offer",
+		"data": map[string]interface{}{
+			"offer":      map[string]interface{}{"type": "offer", "sdp": "v=0\r\n"},
+			"generation": float64(1),
+		},
+	})
+	waitForSentEvent(t, channel, "rtc.offer")
+	channel.emit("rtc.answer", map[string]interface{}{
+		"answer":     map[string]interface{}{"type": "answer", "sdp": "v=0\r\n"},
+		"generation": float64(1),
+	})
+	_ = readGatewayMessage(t, connection)
+
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "offer-2", "type": "rtc.offer",
+		"data": map[string]interface{}{
+			"offer":      map[string]interface{}{"type": "offer", "sdp": "v=0\r\n"},
+			"restart":    true,
+			"generation": float64(2),
+		},
+	})
+	waitForSentEventCount(t, channel, "rtc.offer", 2)
+
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "candidate-current", "type": "rtc.ice_candidate",
+		"data": map[string]interface{}{"candidate": nil, "generation": float64(2)},
+	})
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "candidate-stale", "type": "rtc.ice_candidate",
+		"data": map[string]interface{}{
+			"candidate":  map[string]interface{}{"candidate": "candidate:stale"},
+			"generation": float64(1),
+		},
+	})
+	waitForSentEventCount(t, channel, "rtc.ice_candidate", 2)
+	payloads := sentEventPayloads(channel, "rtc.ice_candidate")
+	if payloads[0]["generation"] != uint64(2) {
+		t.Fatalf("restart generation was rewritten: %#v", payloads[0])
+	}
+	if payloads[1]["generation"] != uint64(1) {
+		t.Fatalf("stale generation was rewritten: %#v", payloads[1])
+	}
+}
+
+func TestGatewayValidatesCandidateGenerationAndKeepsLegacyCompatibility(t *testing.T) {
+	channel, connection, cleanup := dialGateway(t, GatewayOptions{Path: "/api/rtc"})
+	defer cleanup()
+	_ = readGatewayMessage(t, connection)
+
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "legacy-offer", "type": "rtc.offer",
+		"data": map[string]interface{}{
+			"offer": map[string]interface{}{"type": "offer", "sdp": "v=0\r\n"},
+		},
+	})
+	waitForSentEvent(t, channel, "rtc.offer")
+	channel.emit("rtc.answer", map[string]interface{}{
+		"answer": map[string]interface{}{"type": "answer", "sdp": "v=0\r\n"},
+	})
+	_ = readGatewayMessage(t, connection)
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "legacy-candidate", "type": "rtc.ice_candidate",
+		"data": map[string]interface{}{"candidate": nil},
+	})
+	waitForSentEvent(t, channel, "rtc.ice_candidate")
+	if _, exists := sentEventPayloads(channel, "rtc.ice_candidate")[0]["generation"]; exists {
+		t.Fatal("legacy candidate unexpectedly gained a generation")
+	}
+
+	writeGatewayMessage(t, connection, map[string]interface{}{
+		"id": "generated-offer", "type": "rtc.offer",
+		"data": map[string]interface{}{
+			"offer":      map[string]interface{}{"type": "offer", "sdp": "v=0\r\n"},
+			"generation": float64(2),
+		},
+	})
+	waitForSentEventCount(t, channel, "rtc.offer", 2)
+
+	for _, testCase := range []struct {
+		id   string
+		data map[string]interface{}
+	}{
+		{id: "missing", data: map[string]interface{}{"candidate": nil}},
+		{id: "malformed", data: map[string]interface{}{"candidate": nil, "generation": "two"}},
+	} {
+		writeGatewayMessage(t, connection, map[string]interface{}{
+			"id": testCase.id, "type": "rtc.ice_candidate", "data": testCase.data,
+		})
+		errorMessage := readGatewayMessage(t, connection)
+		if errorMessage["id"] != testCase.id || errorMessage["type"] != "gateway.error" {
+			t.Fatalf("unexpected gateway error: %#v", errorMessage)
+		}
+		data := errorMessage["data"].(map[string]interface{})
+		if data["code"] != ErrorCodeCommandInvalid {
+			t.Fatalf("generation error was not typed: %#v", errorMessage)
+		}
+	}
+	if len(sentEventPayloads(channel, "rtc.ice_candidate")) != 1 {
+		t.Fatal("invalid candidates reached Vox")
 	}
 }
 
@@ -346,6 +482,23 @@ func waitForSentEvent(t *testing.T, channel *fakeChannel, event string) {
 		}
 		return false
 	}, event)
+}
+
+func waitForSentEventCount(t *testing.T, channel *fakeChannel, event string, count int) {
+	t.Helper()
+	waitFor(t, func() bool {
+		return len(sentEventPayloads(channel, event)) >= count
+	}, event)
+}
+
+func sentEventPayloads(channel *fakeChannel, event string) []map[string]interface{} {
+	payloads := []map[string]interface{}{}
+	for _, sent := range channel.sentMessages() {
+		if sent.event == event {
+			payloads = append(payloads, sent.payload)
+		}
+	}
+	return payloads
 }
 
 func sentEventPayload(t *testing.T, channel *fakeChannel, event string) map[string]interface{} {

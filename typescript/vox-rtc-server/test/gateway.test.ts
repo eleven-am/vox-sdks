@@ -36,8 +36,11 @@ class FakeSession {
     this.sent.push({ type: "rtc.offer", data: { offer, options } });
   }
 
-  sendIceCandidate(candidate: unknown) {
-    this.sent.push({ type: "rtc.ice_candidate", data: candidate });
+  sendIceCandidate(candidate: unknown, options?: unknown) {
+    this.sent.push({
+      type: "rtc.ice_candidate",
+      data: { candidate, options },
+    });
   }
 
   closeRtc(reason: string) {
@@ -246,10 +249,25 @@ test("gateway forwards the browser generation to Vox and echoes Vox's stamped ge
     );
     assert.equal(
       session.sent[1]?.data &&
-        (session.sent[1].data as { sdpMLineIndex: number }).sdpMLineIndex,
+        (session.sent[1].data as {
+          candidate: { sdpMLineIndex: number };
+        }).candidate.sdpMLineIndex,
       0,
     );
-    assert.equal(session.sent[2]?.data, null);
+    assert.equal(
+      (session.sent[1]?.data as { options: { generation: number } }).options
+        .generation,
+      1,
+    );
+    assert.equal(
+      (session.sent[2]?.data as { candidate: unknown }).candidate,
+      null,
+    );
+    assert.equal(
+      (session.sent[2]?.data as { options: { generation: number } }).options
+        .generation,
+      1,
+    );
 
     const answerPromise = nextMessage(ws);
     session.emitEcho("rtc.answer", {
@@ -288,6 +306,21 @@ test("gateway forwards the browser generation to Vox and echoes Vox's stamped ge
 
     ws.send(
       JSON.stringify({
+        id: "candidate-current",
+        type: "rtc.ice_candidate",
+        data: { candidate: null, generation: 2 },
+      }),
+    );
+    while (session.sent.length < 5)
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      (session.sent[4]?.data as { options: { generation: number } }).options
+        .generation,
+      2,
+    );
+
+    ws.send(
+      JSON.stringify({
         id: "candidate-late",
         type: "rtc.ice_candidate",
         data: {
@@ -300,12 +333,18 @@ test("gateway forwards the browser generation to Vox and echoes Vox's stamped ge
         },
       }),
     );
-    while (session.sent.length < 5)
+    while (session.sent.length < 6)
       await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(session.sent[4]?.type, "rtc.ice_candidate");
+    assert.equal(session.sent[5]?.type, "rtc.ice_candidate");
     assert.equal(
-      (session.sent[4]?.data as { candidate: string }).candidate,
+      (session.sent[5]?.data as { candidate: { candidate: string } }).candidate
+        .candidate,
       "candidate:late",
+    );
+    assert.equal(
+      (session.sent[5]?.data as { options: { generation: number } }).options
+        .generation,
+      1,
     );
 
     const preRestartPromise = nextMessage(ws);
@@ -757,7 +796,7 @@ test("an offer without a generation is forwarded to Vox without the key", async 
   }
 });
 
-test("an offer with a malformed generation is forwarded to Vox without the key", async () => {
+test("a malformed negotiation generation returns a typed gateway error", async () => {
   const session = new FakeSession();
   const server = createServer();
   const { gateway } = createTestGateway(session);
@@ -770,6 +809,7 @@ test("an offer with a malformed generation is forwarded to Vox without the key",
     await once(ws, "open");
     await readyPromise;
 
+    const errorPromise = nextMessage(ws);
     ws.send(
       JSON.stringify({
         id: "offer-1",
@@ -780,14 +820,88 @@ test("an offer with a malformed generation is forwarded to Vox without the key",
         },
       }),
     );
-    while (session.sent.length === 0)
-      await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(session.sent[0]?.type, "rtc.offer");
-    const options = (
-      session.sent[0]?.data as { options: Record<string, unknown> }
-    ).options;
-    assert.equal("generation" in options, false);
+    const error = await errorPromise;
+    assert.equal(error.id, "offer-1");
+    assert.equal(error.type, "gateway.error");
+    assert.equal(
+      (error.data as { code: string }).code,
+      "command_invalid",
+    );
+    assert.match(
+      (error.data as { message: string }).message,
+      /positive safe integer/,
+    );
+    assert.equal(session.sent.length, 0);
     assert.equal(session.offerGeneration, null);
+  } finally {
+    if (ws.readyState === WebSocket.OPEN) ws.close();
+    detach();
+    await closeServer(server);
+  }
+});
+
+test("generated negotiations reject candidates without a valid generation but legacy candidates remain compatible", async () => {
+  const session = new FakeSession();
+  const server = createServer();
+  const { gateway } = createTestGateway(session);
+  const detach = gateway.attach(server);
+  const port = await listen(server);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vox/rtc`);
+
+  try {
+    const readyPromise = nextMessage(ws);
+    await once(ws, "open");
+    await readyPromise;
+
+    ws.send(JSON.stringify({
+      id: "legacy-offer",
+      type: "rtc.offer",
+      data: { offer: { type: "offer", sdp: "legacy-sdp" } },
+    }));
+    while (session.sent.length < 1)
+      await new Promise((resolve) => setImmediate(resolve));
+    const legacyAnswerPromise = nextMessage(ws);
+    session.emit("rtc.answer", {
+      answer: { type: "answer", sdp: "legacy-answer" },
+    });
+    await legacyAnswerPromise;
+
+    ws.send(JSON.stringify({
+      id: "legacy-candidate",
+      type: "rtc.ice_candidate",
+      data: { candidate: null },
+    }));
+    while (session.sent.length < 2)
+      await new Promise((resolve) => setImmediate(resolve));
+    const legacyOptions = (
+      session.sent[1]?.data as { options?: { generation?: number } }
+    ).options;
+    assert.equal(legacyOptions, undefined);
+
+    ws.send(JSON.stringify({
+      id: "generated-offer",
+      type: "rtc.offer",
+      data: {
+        offer: { type: "offer", sdp: "generated-sdp" },
+        generation: 2,
+      },
+    }));
+    while (session.sent.length < 3)
+      await new Promise((resolve) => setImmediate(resolve));
+
+    for (const [id, data, expected] of [
+      ["missing", { candidate: null }, /requires generation/],
+      ["malformed", { candidate: null, generation: 1.5 }, /positive safe integer/],
+    ] as const) {
+      const errorPromise = nextMessage(ws);
+      ws.send(JSON.stringify({ id, type: "rtc.ice_candidate", data }));
+      const error = await errorPromise;
+      assert.equal(error.id, id);
+      assert.equal(error.type, "gateway.error");
+      assert.equal((error.data as { code: string }).code, "command_invalid");
+      assert.match((error.data as { message: string }).message, expected);
+    }
+    assert.equal(session.sent.length, 3);
   } finally {
     if (ws.readyState === WebSocket.OPEN) ws.close();
     detach();

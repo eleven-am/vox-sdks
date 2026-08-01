@@ -29,22 +29,23 @@ defmodule VoxRtcServer.SessionDescription do
   @moduledoc "WebRTC session description used for offer/answer signaling."
 
   @enforce_keys [:type, :sdp]
-  defstruct [:type, :sdp]
+  defstruct [:type, :sdp, :generation]
 
-  @type t :: %__MODULE__{type: String.t(), sdp: String.t()}
+  @type t :: %__MODULE__{type: String.t(), sdp: String.t(), generation: pos_integer() | nil}
 end
 
 defmodule VoxRtcServer.IceCandidate do
   @moduledoc "A trickled WebRTC ICE candidate."
 
   @enforce_keys [:candidate]
-  defstruct [:candidate, :sdp_mid, :sdp_m_line_index, :username_fragment]
+  defstruct [:candidate, :sdp_mid, :sdp_m_line_index, :username_fragment, :generation]
 
   @type t :: %__MODULE__{
           candidate: String.t(),
           sdp_mid: String.t() | nil,
           sdp_m_line_index: non_neg_integer() | nil,
-          username_fragment: String.t() | nil
+          username_fragment: String.t() | nil,
+          generation: pos_integer() | nil
         }
 end
 
@@ -406,13 +407,14 @@ defmodule VoxRtcServer.ErrorEvent do
   ]
 
   @enforce_keys [:message, :recoverable]
-  defstruct [:message, :code, :generation_id, recoverable: true]
+  defstruct [:message, :code, :generation_id, :generation, recoverable: true]
 
   @type t :: %__MODULE__{
           message: String.t(),
           code: String.t() | nil,
           recoverable: boolean(),
-          generation_id: String.t() | nil
+          generation_id: String.t() | nil,
+          generation: pos_integer() | nil
         }
 
   @spec known_codes() :: [String.t()]

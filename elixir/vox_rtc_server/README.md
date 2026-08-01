@@ -127,19 +127,28 @@ alias VoxRtcServer.{IceCandidate, Session, SessionDescription}
 :ok =
   Session.send_offer(
     session,
-    %SessionDescription{type: "offer", sdp: browser_offer_sdp}
+    %SessionDescription{type: "offer", sdp: browser_offer_sdp},
+    false,
+    1
   )
 
 :ok =
-  Session.send_ice_candidate(session, %IceCandidate{
-    candidate: candidate,
-    sdp_mid: sdp_mid,
-    sdp_m_line_index: sdp_m_line_index,
-    username_fragment: username_fragment
-  })
+  Session.send_ice_candidate(
+    session,
+    %IceCandidate{
+      candidate: candidate,
+      sdp_mid: sdp_mid,
+      sdp_m_line_index: sdp_m_line_index,
+      username_fragment: username_fragment
+    },
+    1
+  )
 
-:ok = Session.send_ice_candidate(session, :complete)
+:ok = Session.send_ice_candidate(session, :complete, 1)
 ```
+
+The optional generation is preserved in both directions. Omit it only when
+talking to a legacy, generation-less negotiation.
 
 Vox answers through `:answer`, `:ice_candidate`, and
 `:ice_candidates_complete` events. Your application forwards those signaling

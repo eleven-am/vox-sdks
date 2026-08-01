@@ -205,6 +205,50 @@ test("streaming response commands share one generation id", async () => {
   assert.equal(commit?.payload.generation_id, generationId);
 });
 
+test("ICE candidate commands preserve negotiation generation for candidates and completion", async () => {
+  const fakeSocket = new FakeSocket();
+  const client = new VoxRtcServerClient({
+    httpBase: "https://vox.example.com",
+    fetch,
+    socketFactory: () => fakeSocket as never,
+  });
+  const session = await client.attachSession("rtc_123");
+
+  session.sendIceCandidate(
+    { candidate: "candidate:browser", sdpMid: "0", sdpMLineIndex: 0 },
+    { generation: 1 },
+  );
+  session.sendIceCandidate(null, { generation: 2 });
+  session.sendIceCandidate(null);
+
+  assert.deepEqual(fakeSocket.channel.sent, [
+    {
+      event: "rtc.ice_candidate",
+      payload: {
+        candidate: {
+          candidate: "candidate:browser",
+          sdpMid: "0",
+          sdpMLineIndex: 0,
+          usernameFragment: null,
+        },
+        generation: 1,
+      },
+    },
+    {
+      event: "rtc.ice_candidate",
+      payload: { candidate: null, generation: 2 },
+    },
+    {
+      event: "rtc.ice_candidate",
+      payload: { candidate: null },
+    },
+  ]);
+  assert.throws(
+    () => session.sendIceCandidate(null, { generation: 0 }),
+    /positive safe integer/,
+  );
+});
+
 test("attachSession accepts an already joined channel without joining it again", async () => {
   const fakeSocket = new FakeSocket();
   fakeSocket.channel.state = ChannelState.JOINED;

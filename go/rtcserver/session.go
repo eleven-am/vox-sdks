@@ -345,13 +345,27 @@ func (s *ControlSession) SendOffer(offer RTCSessionDescription, restart bool, ge
 }
 
 func (s *ControlSession) SendIceCandidate(candidate *RTCIceCandidate) {
+	_ = s.SendIceCandidateWithOptions(candidate, nil)
+}
+
+// SendIceCandidateWithOptions sends a trickled candidate, or nil as the
+// end-of-candidates marker, with optional RTC negotiation metadata.
+func (s *ControlSession) SendIceCandidateWithOptions(candidate *RTCIceCandidate, options *RTCIceCandidateOptions) error {
 	var payload interface{}
 	if candidate != nil {
 		payload = candidate
 	}
-	s.SendControl("rtc.ice_candidate", map[string]interface{}{
+	command := map[string]interface{}{
 		"candidate": payload,
-	})
+	}
+	if options != nil && options.Generation != nil {
+		if *options.Generation < 1 {
+			return fmt.Errorf("RTC candidate generation must be a positive integer")
+		}
+		command["generation"] = *options.Generation
+	}
+	s.SendControl("rtc.ice_candidate", command)
+	return nil
 }
 
 func (s *ControlSession) CloseRTC(reason string) {

@@ -74,6 +74,12 @@ The browser sees only public ICE/session metadata. The gateway retains the Vox
 hostname, API key, and internal socket endpoint. Audio remains direct
 browser-to-Vox WebRTC media.
 
+The gateway preserves the browser client's RTC negotiation `generation` on
+the offer, every trickled candidate, and the null end-of-candidates marker.
+Generation-aware negotiations reject missing or malformed candidate
+generations before they reach Vox; generation-less legacy negotiation remains
+supported.
+
 ## PondSocket control session
 
 Applications that do not need the gateway can use the same server session
@@ -97,6 +103,15 @@ session.sendClientEvent({
   event: "render.url",
   payload: { url: "https://example.com" },
 });
+```
+
+Applications doing their own signaling can pass the same generation through
+the direct control API:
+
+```ts
+session.sendOffer(offer, { generation: 1 });
+session.sendIceCandidate(candidate, { generation: 1 });
+session.sendIceCandidate(null, { generation: 1 });
 ```
 
 `sendClientEvent` is server-to-browser. Browser-originated data-channel events

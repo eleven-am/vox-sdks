@@ -69,6 +69,7 @@ interface ActiveGatewaySession {
   context: VoxRtcGatewaySessionContext;
   unsubscribe: Unsubscribe;
   pendingOfferId: string | null;
+  generatedOffer: boolean;
   rtcCloseRequested: boolean;
   closePromise: Promise<void> | null;
   setupPending: boolean;
@@ -140,10 +141,29 @@ function iceCandidate(value: unknown): VoxRtcIceCandidate | null {
   };
 }
 
-function optionalGeneration(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) && Number(value) >= 1
-    ? Number(value)
-    : undefined;
+class GatewayCommandError extends Error {
+  readonly code = "command_invalid";
+}
+
+function negotiationGeneration(
+  data: Record<string, unknown>,
+  options: { command: string; required: boolean },
+): number | undefined {
+  if (!Object.prototype.hasOwnProperty.call(data, "generation")) {
+    if (options.required) {
+      throw new GatewayCommandError(
+        `${options.command} requires generation for a generated RTC negotiation`,
+      );
+    }
+    return undefined;
+  }
+  const value = data.generation;
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw new GatewayCommandError(
+      `${options.command} generation must be a positive safe integer`,
+    );
+  }
+  return Number(value);
 }
 
 export interface VoxRtcGateway {
@@ -263,6 +283,7 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
         context,
         unsubscribe: () => {},
         pendingOfferId: null,
+        generatedOffer: false,
         rtcCloseRequested: false,
         closePromise: null,
         setupPending: true,
@@ -361,18 +382,27 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
         if (active.pendingOfferId !== null) {
           throw new Error("An RTC offer is already pending");
         }
-        const generation = optionalGeneration(message.data.generation);
+        const generation = negotiationGeneration(message.data, {
+          command: "rtc.offer",
+          required: false,
+        });
         const offer = sessionDescription(message.data.offer);
         active.pendingOfferId = message.id;
         active.context.session.sendOffer(offer, {
           restart: message.data.restart === true,
           ...(generation !== undefined ? { generation } : {}),
         });
+        active.generatedOffer = generation !== undefined;
         return;
       }
       if (message.type === "rtc.ice_candidate") {
+        const generation = negotiationGeneration(message.data, {
+          command: "rtc.ice_candidate",
+          required: active.generatedOffer,
+        });
         active.context.session.sendIceCandidate(
           iceCandidate(message.data.candidate),
+          generation === undefined ? undefined : { generation },
         );
         return;
       }
@@ -395,6 +425,9 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
         "gateway.error",
         {
           message: error instanceof Error ? error.message : String(error),
+          ...(error instanceof GatewayCommandError
+            ? { code: error.code }
+            : {}),
         },
         requestId,
       );

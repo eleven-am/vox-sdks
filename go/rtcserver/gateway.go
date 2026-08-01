@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -63,6 +64,7 @@ type gatewaySession struct {
 	writeMu           sync.Mutex
 	mu                sync.Mutex
 	pendingOfferID    string
+	generatedOffer    bool
 	rtcCloseRequested bool
 	closed            bool
 }
@@ -71,6 +73,16 @@ type gatewayClientMessage struct {
 	ID   string                 `json:"id"`
 	Type string                 `json:"type"`
 	Data map[string]interface{} `json:"data"`
+}
+
+type gatewayCommandError struct {
+	message string
+}
+
+func (e *gatewayCommandError) Error() string { return e.message }
+
+func commandInvalid(message string) error {
+	return &gatewayCommandError{message: message}
 }
 
 func NewGateway(options GatewayOptions) *Gateway {
@@ -232,7 +244,7 @@ func (s *gatewaySession) handleMessage(raw []byte) error {
 	message.Type = strings.TrimSpace(message.Type)
 	if message.ID == "" || message.Type == "" || message.Data == nil {
 		err := errors.New("RTC gateway message requires id, type, and object data")
-		s.send(message.ID, "gateway.error", map[string]interface{}{"message": err.Error()})
+		s.send(message.ID, "gateway.error", gatewayErrorPayload(err))
 		return err
 	}
 
@@ -257,12 +269,25 @@ func (s *gatewaySession) handleMessage(raw []byte) error {
 			s.pendingOfferID = ""
 		}
 		s.mu.Unlock()
-		s.send(message.ID, "gateway.error", map[string]interface{}{"message": err.Error()})
+		s.send(message.ID, "gateway.error", gatewayErrorPayload(err))
 	}
 	return err
 }
 
+func gatewayErrorPayload(err error) map[string]interface{} {
+	payload := map[string]interface{}{"message": err.Error()}
+	var commandError *gatewayCommandError
+	if errors.As(err, &commandError) {
+		payload["code"] = ErrorCodeCommandInvalid
+	}
+	return payload
+}
+
 func (s *gatewaySession) handleOffer(message gatewayClientMessage) error {
+	generation, err := parseNegotiationGeneration(message.Data, false, "rtc.offer")
+	if err != nil {
+		return err
+	}
 	offerValue, ok := message.Data["offer"].(map[string]interface{})
 	if !ok {
 		return errors.New("rtc.offer requires an offer object")
@@ -276,18 +301,39 @@ func (s *gatewaySession) handleOffer(message gatewayClientMessage) error {
 	}
 	s.pendingOfferID = message.ID
 	s.mu.Unlock()
-	return s.context.Session.SendOffer(
+	var generationValue interface{}
+	if generation != nil {
+		generationValue = *generation
+	}
+	if err := s.context.Session.SendOffer(
 		RTCSessionDescription{Type: typeValue, SDP: sdp},
 		message.Data["restart"] == true,
-		message.Data["generation"],
-	)
+		generationValue,
+	); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.generatedOffer = generation != nil
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *gatewaySession) handleCandidate(message gatewayClientMessage) error {
+	s.mu.Lock()
+	requiresGeneration := s.generatedOffer
+	s.mu.Unlock()
+	generation, err := parseNegotiationGeneration(
+		message.Data,
+		requiresGeneration,
+		"rtc.ice_candidate",
+	)
+	if err != nil {
+		return err
+	}
+	options := &RTCIceCandidateOptions{Generation: generation}
 	value, exists := message.Data["candidate"]
 	if !exists || value == nil {
-		s.context.Session.SendIceCandidate(nil)
-		return nil
+		return s.context.Session.SendIceCandidateWithOptions(nil, options)
 	}
 	candidateValue, ok := value.(map[string]interface{})
 	if !ok {
@@ -304,8 +350,51 @@ func (s *gatewaySession) handleCandidate(message gatewayClientMessage) error {
 		value := uint32(index)
 		candidate.SDPMLineIndex = &value
 	}
-	s.context.Session.SendIceCandidate(&candidate)
-	return nil
+	return s.context.Session.SendIceCandidateWithOptions(&candidate, options)
+}
+
+func parseNegotiationGeneration(
+	data map[string]interface{},
+	required bool,
+	command string,
+) (*uint64, error) {
+	raw, exists := data["generation"]
+	if !exists {
+		if required {
+			return nil, commandInvalid(fmt.Sprintf(
+				"%s requires generation for a generated RTC negotiation",
+				command,
+			))
+		}
+		return nil, nil
+	}
+
+	var numeric float64
+	switch value := raw.(type) {
+	case float64:
+		numeric = value
+	case float32:
+		numeric = float64(value)
+	case int:
+		numeric = float64(value)
+	case int64:
+		numeric = float64(value)
+	case uint64:
+		numeric = float64(value)
+	default:
+		return nil, commandInvalid(fmt.Sprintf(
+			"%s generation must be a positive safe integer",
+			command,
+		))
+	}
+	if numeric < 1 || numeric > 9007199254740991 || math.Trunc(numeric) != numeric {
+		return nil, commandInvalid(fmt.Sprintf(
+			"%s generation must be a positive safe integer",
+			command,
+		))
+	}
+	generation := uint64(numeric)
+	return &generation, nil
 }
 
 func (s *gatewaySession) forwardEvent(event WireEvent) {

@@ -301,6 +301,10 @@ export interface VoxRtcOfferOptions {
   generation?: number;
 }
 
+export interface VoxRtcIceCandidateOptions {
+  generation?: number;
+}
+
 export type Unsubscribe = () => void;
 
 export interface VoxRtcServerClientOptions {

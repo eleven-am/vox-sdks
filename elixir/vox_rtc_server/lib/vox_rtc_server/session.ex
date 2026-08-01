@@ -69,13 +69,15 @@ defmodule VoxRtcServer.Session do
   def configure(session, %SessionConfig{} = config),
     do: send_control(session, Protocol.configure(config))
 
-  @spec send_offer(t(), SessionDescription.t(), boolean()) :: :ok | {:error, term()}
-  def send_offer(session, %SessionDescription{} = offer, restart \\ false),
-    do: send_control(session, Protocol.offer(offer, restart))
+  @spec send_offer(t(), SessionDescription.t(), boolean(), pos_integer() | nil) ::
+          :ok | {:error, term()}
+  def send_offer(session, %SessionDescription{} = offer, restart \\ false, generation \\ nil),
+    do: send_control(session, Protocol.offer(offer, restart, generation))
 
-  @spec send_ice_candidate(t(), IceCandidate.t() | :complete) :: :ok | {:error, term()}
-  def send_ice_candidate(session, candidate),
-    do: send_control(session, Protocol.candidate(candidate))
+  @spec send_ice_candidate(t(), IceCandidate.t() | :complete, pos_integer() | nil) ::
+          :ok | {:error, term()}
+  def send_ice_candidate(session, candidate, generation \\ nil),
+    do: send_control(session, Protocol.candidate(candidate, generation))
 
   @spec start_response(t(), ResponseOptions.t()) :: :ok | {:error, term()}
   def start_response(session, options \\ %ResponseOptions{}),

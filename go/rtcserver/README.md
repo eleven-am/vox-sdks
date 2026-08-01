@@ -41,6 +41,10 @@ const client = new VoxRtcBrowserClient({
 await client.connect();
 ```
 
+The gateway validates and preserves the browser negotiation generation on the
+offer, every candidate, and the end-of-candidates marker. Legacy offers that
+do not carry a generation remain compatible.
+
 ## PondSocket session
 
 ```go
@@ -64,6 +68,10 @@ session.Configure(rtcserver.SessionConfig{
 })
 log.Printf("session: %s", bootstrap.SessionID)
 ```
+
+For direct signaling, use `SendIceCandidateWithOptions` to correlate both
+regular and nil completion candidates with the offer generation. The original
+`SendIceCandidate` method remains available for legacy negotiation.
 
 ## Response generations and start acknowledgement
 

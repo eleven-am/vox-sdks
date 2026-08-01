@@ -57,26 +57,36 @@ defmodule VoxRtcServer.Protocol do
     control(:session_update, update)
   end
 
-  @spec offer(SessionDescription.t(), boolean()) :: Vox.RtcControlClientMessage.t()
-  def offer(%SessionDescription{} = offer, restart) when is_boolean(restart) do
+  @spec offer(SessionDescription.t(), boolean(), pos_integer() | nil) ::
+          Vox.RtcControlClientMessage.t()
+  def offer(%SessionDescription{} = offer, restart, generation \\ nil)
+      when is_boolean(restart) and
+             (is_nil(generation) or (is_integer(generation) and generation > 0)) do
     control(:offer, %Vox.RtcControlOffer{
       offer: %Vox.RtcSessionDescription{type: offer.type, sdp: offer.sdp},
-      restart: restart
+      restart: restart,
+      generation: generation
     })
   end
 
-  @spec candidate(IceCandidate.t() | :complete) :: Vox.RtcControlClientMessage.t()
-  def candidate(%IceCandidate{} = candidate) do
+  @spec candidate(IceCandidate.t() | :complete, pos_integer() | nil) ::
+          Vox.RtcControlClientMessage.t()
+  def candidate(candidate, generation \\ nil)
+
+  def candidate(%IceCandidate{} = candidate, generation)
+      when is_nil(generation) or (is_integer(generation) and generation > 0) do
     control(:candidate, %Vox.RtcIceCandidate{
       candidate: candidate.candidate,
       sdp_mid: candidate.sdp_mid,
       sdp_m_line_index: candidate.sdp_m_line_index,
-      username_fragment: candidate.username_fragment
+      username_fragment: candidate.username_fragment,
+      generation: generation
     })
   end
 
-  def candidate(:complete) do
-    control(:candidates_complete, %Vox.RtcIceCandidatesComplete{})
+  def candidate(:complete, generation)
+      when is_nil(generation) or (is_integer(generation) and generation > 0) do
+    control(:candidates_complete, %Vox.RtcIceCandidatesComplete{generation: generation})
   end
 
   @spec close(String.t()) :: Vox.RtcControlClientMessage.t()
@@ -147,7 +157,11 @@ defmodule VoxRtcServer.Protocol do
 
     event(
       :answer,
-      %SessionDescription{type: description.type, sdp: description.sdp},
+      %SessionDescription{
+        type: description.type,
+        sdp: description.sdp,
+        generation: payload.generation
+      },
       session_id
     )
   end
@@ -159,7 +173,8 @@ defmodule VoxRtcServer.Protocol do
         candidate: payload.candidate,
         sdp_mid: payload.sdp_mid,
         sdp_m_line_index: payload.sdp_m_line_index,
-        username_fragment: payload.username_fragment
+        username_fragment: payload.username_fragment,
+        generation: payload.generation
       },
       session_id
     )
@@ -272,7 +287,8 @@ defmodule VoxRtcServer.Protocol do
       message: payload.message,
       code: empty_to_nil(payload.code),
       recoverable: payload.recoverable,
-      generation_id: empty_to_nil(payload.generation_id)
+      generation_id: empty_to_nil(payload.generation_id),
+      generation: Map.get(payload, :generation)
     }
   end
 

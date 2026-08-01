@@ -70,31 +70,40 @@ defmodule VoxRtcServer.ClientTest do
              Session.send_offer(
                session,
                %SessionDescription{type: "offer", sdp: "offer-sdp"},
-               true
+               true,
+               1
              )
 
     assert_receive {:control_sent, ^stream, %Vox.RtcControlClientMessage{msg: {:offer, offer}}}
 
     assert offer.restart
     assert offer.offer.sdp == "offer-sdp"
+    assert offer.generation == 1
 
     assert :ok =
-             Session.send_ice_candidate(session, %IceCandidate{
-               candidate: "candidate:browser",
-               sdp_mid: "0",
-               sdp_m_line_index: 0
-             })
+             Session.send_ice_candidate(
+               session,
+               %IceCandidate{
+                 candidate: "candidate:browser",
+                 sdp_mid: "0",
+                 sdp_m_line_index: 0
+               },
+               1
+             )
 
     assert_receive {:control_sent, ^stream,
                     %Vox.RtcControlClientMessage{msg: {:candidate, candidate}}}
 
     assert candidate.candidate == "candidate:browser"
     assert candidate.sdp_m_line_index == 0
+    assert candidate.generation == 1
 
-    assert :ok = Session.send_ice_candidate(session, :complete)
+    assert :ok = Session.send_ice_candidate(session, :complete, 1)
 
     assert_receive {:control_sent, ^stream,
-                    %Vox.RtcControlClientMessage{msg: {:candidates_complete, _complete}}}
+                    %Vox.RtcControlClientMessage{msg: {:candidates_complete, complete}}}
+
+    assert complete.generation == 1
   end
 
   test "streams one response generation over the ordered control stream", %{
@@ -332,14 +341,31 @@ defmodule VoxRtcServer.ClientTest do
         {:answer,
          %Vox.RtcControlAnswer{
            session_id: "rtc_test",
-           answer: %Vox.RtcSessionDescription{type: "answer", sdp: "answer-sdp"}
+           answer: %Vox.RtcSessionDescription{type: "answer", sdp: "answer-sdp"},
+           generation: 2
          }}
     })
 
     assert_receive {:vox_rtc, ^session,
                     %Event{
                       type: :answer,
-                      payload: %SessionDescription{sdp: "answer-sdp"}
+                      payload: %SessionDescription{sdp: "answer-sdp", generation: 2}
+                    }}
+
+    send_server(receiver, stream, %Vox.RtcControlServerMessage{
+      msg:
+        {:candidate,
+         %Vox.RtcIceCandidate{
+           candidate: "candidate:vox",
+           sdp_mid: "0",
+           generation: 2
+         }}
+    })
+
+    assert_receive {:vox_rtc, ^session,
+                    %Event{
+                      type: :ice_candidate,
+                      payload: %IceCandidate{candidate: "candidate:vox", generation: 2}
                     }}
 
     send_server(receiver, stream, %Vox.RtcControlServerMessage{

@@ -10,6 +10,7 @@ import type {
   VoxRtcErrorEvent,
   VoxRtcInterruptionEvent,
   VoxRtcIceCandidate,
+  VoxRtcIceCandidateOptions,
   VoxRtcOfferOptions,
   VoxRtcResponseEvent,
   VoxRtcResponseOptions,
@@ -708,7 +709,16 @@ export class VoxRtcControlSession {
     });
   }
 
-  sendIceCandidate(candidate: VoxRtcIceCandidate | null): void {
+  sendIceCandidate(
+    candidate: VoxRtcIceCandidate | null,
+    options?: VoxRtcIceCandidateOptions,
+  ): void {
+    if (
+      options?.generation !== undefined &&
+      (!Number.isSafeInteger(options.generation) || options.generation < 1)
+    ) {
+      throw new Error("RTC candidate generation must be a positive safe integer");
+    }
     this.sendControl("rtc.ice_candidate", {
       candidate: candidate === null
         ? null
@@ -718,6 +728,9 @@ export class VoxRtcControlSession {
             sdpMLineIndex: candidate.sdpMLineIndex ?? null,
             usernameFragment: candidate.usernameFragment ?? null,
           },
+      ...(options?.generation !== undefined
+        ? { generation: options.generation }
+        : {}),
     });
   }
 

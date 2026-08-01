@@ -1078,6 +1078,48 @@ func TestStartResponseAndWaitContextTimeout(t *testing.T) {
 	}
 }
 
+func TestSendIceCandidateWithOptionsPreservesGeneration(t *testing.T) {
+	fake, session := newAttachedSession(t)
+	generation := uint64(2)
+	if err := session.SendIceCandidateWithOptions(
+		&RTCIceCandidate{Candidate: "candidate:browser"},
+		&RTCIceCandidateOptions{Generation: &generation},
+	); err != nil {
+		t.Fatalf("send candidate: %v", err)
+	}
+	if err := session.SendIceCandidateWithOptions(
+		nil,
+		&RTCIceCandidateOptions{Generation: &generation},
+	); err != nil {
+		t.Fatalf("send completion: %v", err)
+	}
+	payloads := []map[string]interface{}{}
+	for _, sent := range fake.channel.sentMessages() {
+		if sent.event == EventRTCIceCandidate {
+			payloads = append(payloads, sent.payload)
+		}
+	}
+	if len(payloads) != 2 {
+		t.Fatalf("unexpected ICE messages: %#v", payloads)
+	}
+	for _, payload := range payloads {
+		if payload["generation"] != generation {
+			t.Fatalf("candidate generation missing: %#v", payload)
+		}
+	}
+	if payloads[1]["candidate"] != nil {
+		t.Fatalf("completion marker changed: %#v", payloads[1])
+	}
+
+	zero := uint64(0)
+	if err := session.SendIceCandidateWithOptions(
+		nil,
+		&RTCIceCandidateOptions{Generation: &zero},
+	); err == nil {
+		t.Fatal("expected invalid generation error")
+	}
+}
+
 func TestMapChannelStateDeclined(t *testing.T) {
 	if got := mapChannelState(pondsocket.Declined); got != channelStateDeclined {
 		t.Fatalf("expected declined mapping, got %q", got)

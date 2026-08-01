@@ -599,6 +599,7 @@ defmodule Vox.RtcControlAnswer do
 
   field(:session_id, 1, type: :string, json_name: "sessionId")
   field(:answer, 2, type: Vox.RtcSessionDescription)
+  field(:generation, 3, proto3_optional: true, type: :uint64)
 end
 
 defmodule Vox.RtcIceCandidate do
@@ -618,6 +619,8 @@ defmodule Vox.RtcIceCandidate do
     type: :string,
     json_name: "usernameFragment"
   )
+
+  field(:generation, 5, proto3_optional: true, type: :uint64)
 end
 
 defmodule Vox.RtcIceCandidatesComplete do
@@ -627,6 +630,8 @@ defmodule Vox.RtcIceCandidatesComplete do
     full_name: "vox.RtcIceCandidatesComplete",
     protoc_gen_elixir_version: "0.17.0",
     syntax: :proto3
+
+  field(:generation, 1, proto3_optional: true, type: :uint64)
 end
 
 defmodule Vox.RtcControlOffer do
@@ -639,6 +644,7 @@ defmodule Vox.RtcControlOffer do
 
   field(:offer, 1, type: Vox.RtcSessionDescription)
   field(:restart, 2, type: :bool)
+  field(:generation, 3, proto3_optional: true, type: :uint64)
 end
 
 defmodule Vox.RtcControlClose do
@@ -676,6 +682,7 @@ defmodule Vox.RtcSignalingError do
   field(:code, 2, type: :string)
   field(:recoverable, 3, type: :bool)
   field(:generation_id, 4, type: :string, json_name: "generationId")
+  field(:generation, 5, proto3_optional: true, type: :uint64)
 end
 
 defmodule Vox.RtcWireEvent do
