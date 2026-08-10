@@ -56,6 +56,7 @@ class MockDataChannel {
 
 class MockAudioElement {
   volume = 0.8;
+  muted = false;
   srcObject: unknown = null;
   paused = false;
   loaded = false;
@@ -658,15 +659,26 @@ test("sendEvent writes browser-originated events to the WebRTC data channel", as
   await client.disconnect();
 });
 
-test("Vox speech events drive audio ducking over the gateway", async () => {
+function createDuckingHarness(releaseDelayMs = 0) {
   const audio = new MockAudioElement();
-  const { client, sockets } = createHarness({
+  const harness = createHarness({
     onSocket: answerOffers,
     client: {
       audioElement: audio as unknown as HTMLAudioElement,
-      audioDucking: { duckVolume: 0.2, releaseDelayMs: 0 },
+      audioDucking: { duckVolume: 0.2, releaseDelayMs },
     },
   });
+  return { ...harness, audio };
+}
+
+function assertPlaybackIntact(audio: MockAudioElement): void {
+  assert.equal(audio.paused, false);
+  assert.equal(audio.loaded, false);
+  assert.deepEqual(audio.removedAttributes, []);
+}
+
+test("Vox speech events drive audio ducking over the gateway", async () => {
+  const { client, sockets, audio } = createDuckingHarness();
   await client.connect();
   const socket = itemAt(sockets, 0, "gateway socket");
   socket.server("input_audio_buffer.speech_started", {});
@@ -674,6 +686,162 @@ test("Vox speech events drive audio ducking over the gateway", async () => {
   socket.server("interruption.false_positive", {});
   await delay();
   assert.equal(audio.volume, 0.8);
+  await client.disconnect();
+});
+
+test("candidate playout suspension mutes data-channel audio until the matching resume", async () => {
+  const audio = new MockAudioElement();
+  const { client } = createHarness({
+    onSocket: answerOffers,
+    client: { audioElement: audio as unknown as HTMLAudioElement },
+  });
+  await client.connect();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+
+  pc.dataChannel.onmessage?.({
+    data: JSON.stringify({
+      event: "response.audio.suspend",
+      payload: { response_id: "resp_1", candidate_id: 17 },
+    }),
+  } as MessageEvent);
+  assert.equal(audio.muted, true);
+
+  pc.dataChannel.onmessage?.({
+    data: JSON.stringify({
+      event: "response.audio.resume",
+      payload: { response_id: "resp_1", candidate_id: 16 },
+    }),
+  } as MessageEvent);
+  assert.equal(audio.muted, true);
+
+  pc.dataChannel.onmessage?.({
+    data: JSON.stringify({
+      event: "response.audio.resume",
+      payload: { response_id: "resp_1", candidate_id: 17 },
+    }),
+  } as MessageEvent);
+  assert.equal(audio.muted, false);
+  assertPlaybackIntact(audio);
+  await client.disconnect();
+});
+
+test("candidate playout suspension restores a preexisting user mute", async () => {
+  const audio = new MockAudioElement();
+  audio.muted = true;
+  const { client } = createHarness({
+    onSocket: answerOffers,
+    client: { audioElement: audio as unknown as HTMLAudioElement },
+  });
+  await client.connect();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+
+  pc.dataChannel.onmessage?.({
+    data: JSON.stringify({ event: "response.audio.suspend", payload: { candidate_id: 4 } }),
+  } as MessageEvent);
+  pc.dataChannel.onmessage?.({
+    data: JSON.stringify({ event: "response.audio.resume", payload: { candidate_id: 4 } }),
+  } as MessageEvent);
+
+  assert.equal(audio.muted, true);
+  await client.disconnect();
+});
+
+test("disconnect releases an unresolved candidate playout suspension", async () => {
+  const audio = new MockAudioElement();
+  const { client } = createHarness({
+    onSocket: answerOffers,
+    client: { audioElement: audio as unknown as HTMLAudioElement },
+  });
+  await client.connect();
+  const pc = itemAt(MockPeerConnection.instances, 0, "peer connection");
+
+  pc.dataChannel.onmessage?.({
+    data: JSON.stringify({ event: "response.audio.suspend", payload: { candidate_id: 9 } }),
+  } as MessageEvent);
+  assert.equal(audio.muted, true);
+
+  await client.disconnect();
+
+  assert.equal(audio.muted, false);
+});
+
+test("speech onset ducks a full turn-state round trip before the held state lands", async () => {
+  const { client, sockets, audio } = createDuckingHarness();
+  await client.connect();
+  const socket = itemAt(sockets, 0, "gateway socket");
+  socket.server("turn.state_changed", { state: "speaking", previous_state: "thinking" });
+  assert.equal(audio.volume, 0.8);
+
+  socket.server("input_audio_buffer.speech_started", { timestamp_ms: 900 });
+  assert.equal(audio.volume, 0.2);
+
+  socket.server("turn.state_changed", { state: "paused", previous_state: "speaking" });
+  assert.equal(audio.volume, 0.2);
+  assertPlaybackIntact(audio);
+  await client.disconnect();
+});
+
+test("a held turn state ducks playback on its own and releases when Vox resumes speaking", async () => {
+  const { client, sockets, audio } = createDuckingHarness();
+  await client.connect();
+  const socket = itemAt(sockets, 0, "gateway socket");
+  socket.server("turn.state_changed", { state: "paused", previous_state: "speaking" });
+  assert.equal(audio.volume, 0.2);
+  assertPlaybackIntact(audio);
+
+  socket.server("turn.state_changed", { state: "speaking", previous_state: "paused" });
+  await delay();
+  assert.equal(audio.volume, 0.8);
+  assertPlaybackIntact(audio);
+  await client.disconnect();
+});
+
+test("a held output stays ducked through the speech_stopped that precedes the final transcript", async () => {
+  const { client, sockets, audio } = createDuckingHarness();
+  await client.connect();
+  const socket = itemAt(sockets, 0, "gateway socket");
+  socket.server("turn.state_changed", { state: "speaking", previous_state: "thinking" });
+  socket.server("input_audio_buffer.speech_started", { timestamp_ms: 900 });
+  socket.server("turn.state_changed", { state: "paused", previous_state: "speaking" });
+  assert.equal(audio.volume, 0.2);
+
+  socket.server("input_audio_buffer.speech_stopped", { timestamp_ms: 1180 });
+  await delay();
+  assert.equal(audio.volume, 0.2);
+  assertPlaybackIntact(audio);
+
+  socket.server("turn.state_changed", { state: "speaking", previous_state: "paused" });
+  await delay();
+  assert.equal(audio.volume, 0.8);
+  assertPlaybackIntact(audio);
+  await client.disconnect();
+});
+
+test("a duck raised by a false interruption candidate releases without discarding audio", async () => {
+  const { client, sockets, audio } = createDuckingHarness(20);
+  await client.connect();
+  const socket = itemAt(sockets, 0, "gateway socket");
+  socket.server("turn.state_changed", { state: "speaking", previous_state: "thinking" });
+  socket.server("input_audio_buffer.speech_started", { timestamp_ms: 900 });
+  socket.server("turn.state_changed", { state: "paused", previous_state: "speaking" });
+  assert.equal(audio.volume, 0.2);
+
+  socket.server("interruption.false_positive", { reason: "backchannel" });
+  socket.server("input_audio_buffer.speech_stopped", { timestamp_ms: 1120 });
+  socket.server("turn.state_changed", { state: "speaking", previous_state: "paused" });
+  assert.equal(audio.volume, 0.2);
+  assertPlaybackIntact(audio);
+
+  await delay(60);
+  assert.equal(audio.volume, 0.8);
+  assertPlaybackIntact(audio);
+
+  socket.server("input_audio_buffer.speech_started", { timestamp_ms: 2400 });
+  assert.equal(audio.volume, 0.2);
+  socket.server("interruption.false_positive", { reason: "backchannel" });
+  await delay(60);
+  assert.equal(audio.volume, 0.8);
+  assertPlaybackIntact(audio);
   await client.disconnect();
 });
 

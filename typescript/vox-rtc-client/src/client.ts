@@ -50,6 +50,8 @@ type MediaConnectionWait = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type AudioDuckingSource = "speech" | "hold";
+
 const DUCKING_VOX_START_EVENTS = new Set([
   "input_audio_buffer.speech_started",
   "interruption.detected",
@@ -61,6 +63,28 @@ const DUCKING_VOX_STOP_EVENTS = new Set([
   "response.audio.clear",
   "response.cancelled",
   "response.done",
+]);
+
+const DUCKING_TURN_STATE_EVENT = "turn.state_changed";
+const PLAYOUT_SUSPEND_EVENT = "response.audio.suspend";
+const PLAYOUT_RESUME_EVENT = "response.audio.resume";
+
+const PLAYOUT_TERMINAL_EVENTS = new Set([
+  "response.audio.clear",
+  "response.cancelled",
+  "response.done",
+]);
+
+const DUCKING_HELD_TURN_STATES = new Set([
+  "paused",
+  "listening",
+  "interrupted",
+]);
+
+const DUCKING_RELEASED_TURN_STATES = new Set([
+  "idle",
+  "thinking",
+  "speaking",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -195,7 +219,9 @@ export class VoxRtcBrowserClient {
   #awaitingRemoteDescription = false;
   #audioDuckingReleaseTimer: ReturnType<typeof setTimeout> | null = null;
   #audioDuckingBaseVolume: number | null = null;
-  #audioDuckingVoxActive = false;
+  #audioDuckingSources = new Set<AudioDuckingSource>();
+  #playoutSuspendOwner: number | null = null;
+  #mutedBeforePlayoutSuspend: boolean | null = null;
   #connectionAttempt = 0;
   #mediaConnectionWait: MediaConnectionWait | null = null;
 
@@ -436,6 +462,9 @@ export class VoxRtcBrowserClient {
       const message = parseDataMessage(event.data);
       this.#emit("dataMessage", message);
       if ("event" in message) {
+        const controlEvent = { event: message.event, payload: message.payload };
+        this.#handlePlayoutControlEvent(controlEvent);
+        this.#handleAudioDuckingControlEvent(controlEvent);
         this.#emit("clientEvent", message);
       }
     };
@@ -443,6 +472,7 @@ export class VoxRtcBrowserClient {
 
   #handleSignalingEvent(event: VoxRtcSignalingEvent): void {
     this.#emit("signalingMessage", event);
+    this.#handlePlayoutControlEvent({ type: event.type, data: event.data });
     this.#handleAudioDuckingControlEvent({ type: event.type, data: event.data });
 
     if (event.type === "error") {
@@ -680,27 +710,75 @@ export class VoxRtcBrowserClient {
     }
 
     const type = eventTypeFromControlEvent(event);
-    const payload = payloadFromControlEvent(event);
     if (DUCKING_VOX_START_EVENTS.has(type)) {
-      this.#audioDuckingVoxActive = true;
-      this.#beginAudioDucking();
+      this.#engageAudioDuckingSource("speech");
       return;
     }
     if (DUCKING_VOX_STOP_EVENTS.has(type)) {
-      this.#audioDuckingVoxActive = false;
-      this.#requestAudioDuckingRelease();
+      this.#clearAudioDuckingSource("speech");
       return;
     }
-    if (type === "turn.state_changed") {
-      const state = typeof payload.state === "string" ? payload.state : "";
-      if (state === "listening" || state === "interrupted") {
-        this.#audioDuckingVoxActive = true;
-        this.#beginAudioDucking();
-      } else if (state === "idle" || state === "thinking" || state === "speaking") {
-        this.#audioDuckingVoxActive = false;
-        this.#requestAudioDuckingRelease();
-      }
+    if (type !== DUCKING_TURN_STATE_EVENT) {
+      return;
     }
+    const payload = payloadFromControlEvent(event);
+    const state = typeof payload.state === "string" ? payload.state : "";
+    if (DUCKING_HELD_TURN_STATES.has(state)) {
+      this.#engageAudioDuckingSource("hold");
+      return;
+    }
+    if (DUCKING_RELEASED_TURN_STATES.has(state)) {
+      this.#clearAudioDuckingSource("hold");
+    }
+  }
+
+  #handlePlayoutControlEvent(event: VoxRtcControlEventLike): void {
+    if (!this.#audioElement) {
+      return;
+    }
+    const type = eventTypeFromControlEvent(event);
+    if (type === PLAYOUT_SUSPEND_EVENT) {
+      const payload = payloadFromControlEvent(event);
+      const candidateId = payload.candidate_id;
+      if (typeof candidateId !== "number" || !Number.isSafeInteger(candidateId) || candidateId <= 0) {
+        return;
+      }
+      if (this.#mutedBeforePlayoutSuspend === null) {
+        this.#mutedBeforePlayoutSuspend = this.#audioElement.muted;
+      }
+      this.#playoutSuspendOwner = candidateId;
+      this.#audioElement.muted = true;
+      return;
+    }
+    if (type === PLAYOUT_RESUME_EVENT) {
+      const payload = payloadFromControlEvent(event);
+      if (payload.candidate_id !== this.#playoutSuspendOwner) {
+        return;
+      }
+      this.#releasePlayoutSuspend();
+      return;
+    }
+    if (PLAYOUT_TERMINAL_EVENTS.has(type)) {
+      this.#releasePlayoutSuspend();
+    }
+  }
+
+  #releasePlayoutSuspend(): void {
+    if (this.#audioElement && this.#mutedBeforePlayoutSuspend !== null) {
+      this.#audioElement.muted = this.#mutedBeforePlayoutSuspend;
+    }
+    this.#playoutSuspendOwner = null;
+    this.#mutedBeforePlayoutSuspend = null;
+  }
+
+  #engageAudioDuckingSource(source: AudioDuckingSource): void {
+    this.#audioDuckingSources.add(source);
+    this.#beginAudioDucking();
+  }
+
+  #clearAudioDuckingSource(source: AudioDuckingSource): void {
+    this.#audioDuckingSources.delete(source);
+    this.#requestAudioDuckingRelease();
   }
 
   #beginAudioDucking(): void {
@@ -718,7 +796,7 @@ export class VoxRtcBrowserClient {
   }
 
   #requestAudioDuckingRelease(): void {
-    if (this.#audioDuckingVoxActive) {
+    if (this.#audioDuckingSources.size > 0) {
       return;
     }
     const delay = this.#audioDuckingConfig?.releaseDelayMs ?? 0;
@@ -731,7 +809,7 @@ export class VoxRtcBrowserClient {
     }
     this.#audioDuckingReleaseTimer = setTimeout(() => {
       this.#audioDuckingReleaseTimer = null;
-      if (!this.#audioDuckingVoxActive) {
+      if (this.#audioDuckingSources.size === 0) {
         this.#restoreDuckedVolume();
       }
     }, delay);
@@ -762,11 +840,12 @@ export class VoxRtcBrowserClient {
 
   #resetAudioDuckingState(): void {
     this.#audioDuckingBaseVolume = null;
-    this.#audioDuckingVoxActive = false;
+    this.#audioDuckingSources = new Set();
   }
 
   #cleanup(): void {
     this.#rejectMediaConnectionWait(new MediaConnectionCancelledError());
+    this.#releasePlayoutSuspend();
     this.#stopAudioDucking();
     const signaling = this.#signaling;
     this.#signaling = null;

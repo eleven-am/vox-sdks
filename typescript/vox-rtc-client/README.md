@@ -167,7 +167,30 @@ const client = new VoxRtcBrowserClient({
 Ducking follows the authoritative Vox speech and interruption events that the
 gateway already forwards, so applications do not need another SSE or WebSocket
 connection. Vox owns the interruption decision; ducking only adjusts local
-playback volume while that decision is pending.
+playback volume while that decision is pending. Queued audio is never dropped —
+only `response.audio.clear` tells a client to discard playback.
+
+Vox interruption candidates also use `response.audio.suspend` and
+`response.audio.resume`. The browser client applies these events automatically,
+even when optional ducking is disabled. Suspension mutes the remote media
+element without pausing, loading, or replacing its stream, and a resume is
+accepted only from the candidate that owns the suspension. This makes VAD onset
+quiet immediately while preserving buffered audio for a false-positive resume.
+
+Two independent signals hold the duck, and playback returns to its original
+volume once both have cleared:
+
+| Signal | Engaged by | Cleared by |
+| --- | --- | --- |
+| Speech | `input_audio_buffer.speech_started`, `interruption.detected` | `input_audio_buffer.speech_stopped`, `interruption.false_positive`, `response.audio.clear`, `response.cancelled`, `response.done` |
+| Hold | `turn.state_changed` with state `paused`, `listening`, or `interrupted` | `turn.state_changed` with state `speaking`, `thinking`, or `idle` |
+
+Vox emits `input_audio_buffer.speech_started` at VAD onset, before the turn
+state machine runs, so the speech signal ducks the buffered WebRTC audio a full
+server round-trip earlier than `turn.state_changed: paused` could. The hold
+signal then keeps the duck engaged for as long as Vox reports the output held —
+including while Vox waits for a final transcript after the user has already
+stopped speaking, which is when the speech signal alone would release too early.
 
 ## Private data
 
