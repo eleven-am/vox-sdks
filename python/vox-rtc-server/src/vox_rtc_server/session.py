@@ -17,6 +17,7 @@ from .types import (
     ResponseOptions,
     ResponseOutput,
     ResponseOutputOptions,
+    ResponseSpokenTextEvent,
     SessionAttachedEvent,
     SessionConfig,
     SessionCreatedEvent,
@@ -49,6 +50,7 @@ EVT_RESPONSE_CANCELLED = "response.cancelled"
 EVT_RESPONSE_COMMITTED = "response.committed"
 EVT_RESPONSE_CREATED = "response.created"
 EVT_RESPONSE_DONE = "response.done"
+EVT_RESPONSE_SPOKEN_TEXT = "response.spoken_text.resolved"
 EVT_RTC_SESSION_ATTACHED = "rtc.session.attached"
 EVT_SESSION_CREATED = "session.created"
 EVT_SPEECH_STARTED = "input_audio_buffer.speech_started"
@@ -267,6 +269,8 @@ def _response_options_payload(options: ResponseOptions | None) -> dict[str, Any]
             payload["allow_interruptions"] = options.allow_interruptions
         if options.generation_id is not None:
             payload["generation_id"] = options.generation_id
+        if options.supersedes_generation_id is not None:
+            payload["supersedes_generation_id"] = options.supersedes_generation_id
         if options.output is not None:
             payload["output"] = _response_output_options_payload(options.output)
     return payload
@@ -531,6 +535,9 @@ class VoxRtcControlSession:
                     **self._common(payload),
                     response_id=_optional_str(payload.get("response_id")),
                     generation_id=_optional_str(payload.get("generation_id")),
+                    supersedes_generation_id=_optional_str(payload.get("supersedes_generation_id")),
+                    superseded_by_generation_id=_optional_str(payload.get("superseded_by_generation_id")),
+                    reason=_optional_str(payload.get("reason")),
                     output=_parse_response_output(payload.get("output")),
                 )
             )
@@ -554,6 +561,26 @@ class VoxRtcControlSession:
         self, handler: Callable[[ResponseEvent], None]
     ) -> Unsubscribe:
         return self._on_response_event(EVT_RESPONSE_CANCELLED, handler)
+
+    def on_response_spoken_text(
+        self, handler: Callable[[ResponseSpokenTextEvent], None]
+    ) -> Unsubscribe:
+        def emit(payload: dict[str, Any]) -> None:
+            handler(
+                ResponseSpokenTextEvent(
+                    **self._common(payload),
+                    response_id=_optional_str(payload.get("response_id")),
+                    generation_id=_optional_str(payload.get("generation_id")),
+                    output=_parse_response_output(payload.get("output")),
+                    spoken_text=_required_str(payload.get("spoken_text")),
+                    partial_status=_required_str(
+                        payload.get("partial_status"), "partial_omitted"
+                    ),
+                    played_audio_ms=_required_int(payload.get("played_audio_ms")),
+                )
+            )
+
+        return self.on(EVT_RESPONSE_SPOKEN_TEXT, emit)
 
     def on_response_audio_clear(
         self, handler: Callable[[ResponseEvent], None]
@@ -758,6 +785,19 @@ class VoxRtcControlSession:
         finally:
             unsubscribe_created()
             unsubscribe_error()
+
+    async def supersede_response_and_wait(
+        self,
+        supersedes_generation_id: str,
+        options: ResponseOptions | None = None,
+        *,
+        timeout: float = 5.0,
+    ) -> StartAck:
+        start_options = replace(
+            options if options is not None else ResponseOptions(),
+            supersedes_generation_id=supersedes_generation_id,
+        )
+        return await self.start_response_and_wait(start_options, timeout=timeout)
 
     def append_response_text(
         self,

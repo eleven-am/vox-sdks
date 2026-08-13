@@ -268,9 +268,17 @@ Call `Session.close/2` when an application call ends and `Client.close/1` during
 an intentional client shutdown. Supervision shutdown also closes owned
 sessions and the gRPC channel.
 
+Cancelled responses are followed by a `:response_spoken_text` event containing
+the conservative generated prefix Vox verified at RTC playout. Persist its
+`spoken_text` field as assistant history for the interrupted turn.
+
 ## Contract source
 
 Generated protobuf and gRPC modules live under `lib/generated`. They are
 generated from `priv/proto/vox.proto`, copied from Vox's canonical
 `proto/vox.proto`. The public SDK wraps those generated modules so application
 code does not have to construct control-stream envelopes directly.
+
+Use `Session.supersede_response_and_wait/4` to atomically replace a named
+active assistant generation. Stream later deltas with the generation ID from
+the returned acknowledgement.

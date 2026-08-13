@@ -258,7 +258,10 @@ mod tests {
     #[test]
     fn injects_api_key_into_socket_params() {
         let params = socket_params_with_api_key(EventData::new(), Some("secret"));
-        assert_eq!(params.get("api_key").and_then(Value::as_str), Some("secret"));
+        assert_eq!(
+            params.get("api_key").and_then(Value::as_str),
+            Some("secret")
+        );
     }
 
     #[test]

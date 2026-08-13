@@ -82,6 +82,9 @@ omitted, `StartResponse` generates one and threads it through
 lifecycle events (`response.created`, `response.committed`, `response.done`,
 `response.cancelled`, `response.audio.clear`, `interruption.*`) expose the
 correlated `GenerationID` when the server knows it.
+`OnResponseSpokenText` emits the conservative generated prefix verified at RTC
+playout for a cancelled response; persist `SpokenText` as assistant history for
+the interrupted turn.
 
 Instead of fire-and-forget, gate delta pumping on the start acknowledgement:
 
@@ -185,3 +188,6 @@ session.OnTranscript(func(event rtcserver.TranscriptEvent) {
 decoded as `nil` without dropping the transcript event. The pointer session
 configuration preserves the difference between omitted and explicitly
 disabled.
+
+`SupersedeResponseAndWait` atomically replaces the specified active generation.
+Continue streaming deltas with the generation ID returned by its acknowledgement.

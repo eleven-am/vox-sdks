@@ -14,6 +14,7 @@ const (
 	EventResponseCommitted         = "response.committed"
 	EventResponseCreated           = "response.created"
 	EventResponseDone              = "response.done"
+	EventResponseSpokenText        = "response.spoken_text.resolved"
 	EventRTCSessionAttached        = "rtc.session.attached"
 	EventRTCSignalingError         = "rtc.signaling_error"
 	EventRTCAnswer                 = "rtc.answer"
@@ -85,9 +86,10 @@ type SessionOptions struct {
 }
 
 type ResponseOptions struct {
-	AllowInterruptions *bool
-	GenerationID       string
-	Output             *ResponseOutputOptions
+	AllowInterruptions     *bool
+	GenerationID           string
+	SupersedesGenerationID string
+	Output                 *ResponseOutputOptions
 }
 
 type ResponseOutputOptions struct {
@@ -249,12 +251,22 @@ type TurnEouPredictedEvent struct {
 }
 
 type ResponseEvent struct {
-	SessionID    string
-	ChannelName  string
-	Data         map[string]interface{}
-	ResponseID   string
-	GenerationID string
-	Output       *ResponseOutput
+	SessionID                string
+	ChannelName              string
+	Data                     map[string]interface{}
+	ResponseID               string
+	GenerationID             string
+	SupersedesGenerationID   string
+	SupersededByGenerationID string
+	Reason                   string
+	Output                   *ResponseOutput
+}
+
+type ResponseSpokenTextEvent struct {
+	ResponseEvent
+	SpokenText    string
+	PartialStatus string
+	PlayedAudioMS float64
 }
 
 type InterruptionEvent struct {

@@ -171,6 +171,22 @@ defmodule VoxRtcServer.ClientTest do
     assert client_event.event == "application.context"
   end
 
+  test "response start carries superseded generation identity", %{client: client} do
+    {_bootstrap, session, stream, _receiver} = create_attached_session(client)
+
+    assert :ok =
+             Session.start_response(session, %ResponseOptions{
+               generation_id: "gen-new",
+               supersedes_generation_id: "gen-old"
+             })
+
+    assert_receive {:control_sent, ^stream,
+                    %Vox.RtcControlClientMessage{msg: {:response_start, start}}}
+
+    assert start.generation_id == "gen-new"
+    assert start.supersedes_generation_id == "gen-old"
+  end
+
   test "preserves an explicit response generation", %{client: client} do
     {_bootstrap, session, stream, _receiver} = create_attached_session(client)
     options = %ResponseOptions{generation_id: "generation-explicit"}

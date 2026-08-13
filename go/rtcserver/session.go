@@ -224,6 +224,24 @@ func (s *ControlSession) OnResponseCancelled(handler func(ResponseEvent)) func()
 	return s.onResponseEvent(EventResponseCancelled, handler)
 }
 
+func (s *ControlSession) OnResponseSpokenText(handler func(ResponseSpokenTextEvent)) func() {
+	return s.On(EventResponseSpokenText, func(payload map[string]interface{}) {
+		handler(ResponseSpokenTextEvent{
+			ResponseEvent: ResponseEvent{
+				SessionID:    eventSessionID(payload, s.sessionID),
+				ChannelName:  s.channelName,
+				Data:         payload,
+				ResponseID:   stringValue(payload, "response_id", ""),
+				GenerationID: stringValue(payload, "generation_id", ""),
+				Output:       responseOutput(payload),
+			},
+			SpokenText:    stringValue(payload, "spoken_text", ""),
+			PartialStatus: stringValue(payload, "partial_status", "partial_omitted"),
+			PlayedAudioMS: numberValue(payload, "played_audio_ms"),
+		})
+	})
+}
+
 func (s *ControlSession) OnResponseAudioClear(handler func(ResponseEvent)) func() {
 	return s.onResponseEvent(EventResponseAudioClear, handler)
 }
@@ -231,12 +249,15 @@ func (s *ControlSession) OnResponseAudioClear(handler func(ResponseEvent)) func(
 func (s *ControlSession) onResponseEvent(eventName string, handler func(ResponseEvent)) func() {
 	return s.On(eventName, func(payload map[string]interface{}) {
 		handler(ResponseEvent{
-			SessionID:    eventSessionID(payload, s.sessionID),
-			ChannelName:  s.channelName,
-			Data:         payload,
-			ResponseID:   stringValue(payload, "response_id", ""),
-			GenerationID: stringValue(payload, "generation_id", ""),
-			Output:       responseOutput(payload),
+			SessionID:                eventSessionID(payload, s.sessionID),
+			ChannelName:              s.channelName,
+			Data:                     payload,
+			ResponseID:               stringValue(payload, "response_id", ""),
+			GenerationID:             stringValue(payload, "generation_id", ""),
+			SupersedesGenerationID:   stringValue(payload, "supersedes_generation_id", ""),
+			SupersededByGenerationID: stringValue(payload, "superseded_by_generation_id", ""),
+			Reason:                   stringValue(payload, "reason", ""),
+			Output:                   responseOutput(payload),
 		})
 	})
 }
@@ -467,6 +488,15 @@ func (s *ControlSession) StartResponseAndWait(ctx context.Context, options *Resp
 	}
 }
 
+func (s *ControlSession) SupersedeResponseAndWait(ctx context.Context, supersedesGenerationID string, options *ResponseOptions) (StartAck, error) {
+	opts := ResponseOptions{}
+	if options != nil {
+		opts = *options
+	}
+	opts.SupersedesGenerationID = supersedesGenerationID
+	return s.StartResponseAndWait(ctx, &opts)
+}
+
 func (s *ControlSession) AppendResponseText(delta string, options *ResponseOptions) {
 	payload := responseOptionsPayload(options)
 	payload["delta"] = delta
@@ -569,6 +599,9 @@ func responseOptionsPayload(options *ResponseOptions) map[string]interface{} {
 	}
 	if options != nil && options.GenerationID != "" {
 		payload["generation_id"] = options.GenerationID
+	}
+	if options != nil && options.SupersedesGenerationID != "" {
+		payload["supersedes_generation_id"] = options.SupersedesGenerationID
 	}
 	if options != nil && options.Output != nil {
 		payload["output"] = responseOutputOptionsPayload(options.Output)

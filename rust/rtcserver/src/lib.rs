@@ -9,8 +9,6 @@ pub use client::{
     ControlledSession, SessionOptions, VoxRtcServerClient, VoxRtcServerClientOptions,
 };
 pub use error::{Result, VoxRtcError};
-pub use gateway::{
-    GatewayClosedContext, GatewayOptions, GatewaySessionContext, VoxRtcGateway,
-};
+pub use gateway::{GatewayClosedContext, GatewayOptions, GatewaySessionContext, VoxRtcGateway};
 pub use session::{Listener, VoxRtcControlSession};
 pub use types::*;

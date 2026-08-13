@@ -97,6 +97,7 @@ defmodule VoxRtcServer.Protocol do
     control(:response_start, %Vox.ConversationResponseStart{
       allow_interruptions: options.allow_interruptions,
       generation_id: options.generation_id || "",
+      supersedes_generation_id: options.supersedes_generation_id || "",
       output: response_output(options.output)
     })
   end
@@ -228,6 +229,7 @@ defmodule VoxRtcServer.Protocol do
     audio_clear: :response_audio_clear,
     response_done: :response_done,
     response_cancelled: :response_cancelled,
+    response_spoken_text: :response_spoken_text,
     state_changed: :turn_state_changed,
     interruption_detected: :interruption_detected,
     interruption_false_positive: :interruption_false_positive,

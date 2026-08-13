@@ -456,6 +456,37 @@ def test_on_speech_started_maps_typed_fields() -> None:
     assert events[0].channel_name == "/rtc/rtc_123"
 
 
+def test_on_response_spoken_text_maps_canonical_prefix_fields() -> None:
+    fake_socket = FakeSocket()
+    client = VoxRtcServerClient(
+        http_base="https://vox.example.com",
+        socket_factory=lambda *args: fake_socket,
+    )
+    session = asyncio.run(client.attach_session("rtc_123"))
+    events: list[Any] = []
+    unsubscribe = session.on_response_spoken_text(events.append)
+
+    fake_socket.channel.emit(
+        "response.spoken_text.resolved",
+        {
+            "response_id": "resp_1",
+            "generation_id": "gen_1",
+            "spoken_text": "The words actually spoken",
+            "partial_status": "matched",
+            "played_audio_ms": 640,
+            "session_id": "rtc_123",
+        },
+    )
+    unsubscribe()
+
+    assert len(events) == 1
+    assert events[0].response_id == "resp_1"
+    assert events[0].generation_id == "gen_1"
+    assert events[0].spoken_text == "The words actually spoken"
+    assert events[0].partial_status == "matched"
+    assert events[0].played_audio_ms == 640
+
+
 def test_on_speech_stopped_maps_typed_fields() -> None:
     fake_socket = FakeSocket()
     client = VoxRtcServerClient(
@@ -632,6 +663,26 @@ def test_response_options_generation_id_threads_outbound_payloads() -> None:
     assert sent[2][1] == {"generation_id": "gen-42"}
     assert sent[3][1] == {"generation_id": "gen-42"}
     assert sent[4][1] == {"generation_id": "gen-43", "text": "Bye"}
+
+
+def test_response_start_carries_superseded_generation_identity() -> None:
+    fake_socket = FakeSocket()
+    session = asyncio.run(_attach(fake_socket))
+
+    session.start_response(
+        ResponseOptions(
+            generation_id="gen-new",
+            supersedes_generation_id="gen-old",
+        )
+    )
+
+    assert fake_socket.channel.sent[0] == (
+        "response.start",
+        {
+            "generation_id": "gen-new",
+            "supersedes_generation_id": "gen-old",
+        },
+    )
 
 
 def test_explicit_generation_id_is_threaded_to_later_commands() -> None:

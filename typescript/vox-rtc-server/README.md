@@ -157,8 +157,12 @@ without dropping the transcript event.
 `replaceResponseText`, and `sendTextResponse` accept an optional `generationId`
 (sent on the wire as `generation_id`). Response lifecycle events
 (`onResponseCreated`, `onResponseCommitted`, `onResponseDone`,
-`onResponseCancelled`, `onResponseAudioClear`, `onInterruptionDetected`,
+`onResponseCancelled`, `onResponseSpokenText`, `onResponseAudioClear`, `onInterruptionDetected`,
 `onInterruptionFalsePositive`) expose `generationId` when the server knows it.
+
+After cancellation, `onResponseSpokenText` delivers the conservative generated
+text prefix Vox verified at RTC playout. Persist `spokenText`, not the full
+generated response, as assistant history for that interrupted turn.
 
 Instead of fire-and-forget, gate delta pumping on the start acknowledgement:
 
@@ -237,3 +241,7 @@ const off = vox.onConnectionChange((state) => {
   console.log("Vox control connection", state);
 });
 ```
+
+Use `supersedeResponseAndWait(oldGenerationId, options)` when the assistant
+must atomically stop and replace its own active response. Continue sending
+deltas with the generation returned by the acknowledgement.

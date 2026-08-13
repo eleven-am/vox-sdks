@@ -137,6 +137,9 @@ else:
 You can also thread your own generation id through every response command via
 `ResponseOptions(generation_id="gen-42")`; response lifecycle events
 (`ResponseEvent`, `InterruptionEvent`) expose the echoed `generation_id`.
+`on_response_spoken_text` emits the conservative generated prefix verified at
+RTC playout for a cancelled response; persist its `spoken_text` as assistant
+history for the interrupted turn.
 The response-scoped `output` is optional. Vox fills omitted fields from the
 session configuration and echoes the immutable effective selection on the
 acknowledgement and `ResponseEvent`.
@@ -162,3 +165,7 @@ carrying `message` and a numeric `generation`. This event is terminal: Vox close
 the session immediately after emitting it, so there is no `recoverable` field —
 treat it as the end of the call, not a per-command error like the conversation
 `error` stream.
+
+Use `await session.supersede_response_and_wait(old_generation_id, options)` to
+atomically replace the assistant's active response without invoking VAD or
+fabricating user speech.

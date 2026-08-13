@@ -16,6 +16,7 @@ import type {
   VoxRtcResponseOptions,
   VoxRtcResponseOutput,
   VoxRtcResponseOutputOptions,
+  VoxRtcResponseSpokenTextEvent,
   VoxRtcSessionAttachedEvent,
   VoxRtcSessionConfig,
   VoxRtcSessionCreatedEvent,
@@ -48,6 +49,7 @@ const EVT_RESPONSE_CANCELLED = "response.cancelled";
 const EVT_RESPONSE_COMMITTED = "response.committed";
 const EVT_RESPONSE_CREATED = "response.created";
 const EVT_RESPONSE_DONE = "response.done";
+const EVT_RESPONSE_SPOKEN_TEXT = "response.spoken_text.resolved";
 const EVT_RTC_SESSION_ATTACHED = "rtc.session.attached";
 const EVT_RTC_ANSWER = "rtc.answer";
 const EVT_RTC_ICE_CANDIDATE = "rtc.ice_candidate";
@@ -267,11 +269,30 @@ function responseEvent(
   channelName: string,
 ): VoxRtcResponseEvent {
   const output = responseOutput(payload.output);
+  const supersedesGenerationId = optionalString(payload.supersedes_generation_id);
+  const supersededByGenerationId = optionalString(payload.superseded_by_generation_id);
+  const reason = optionalString(payload.reason);
   return {
     ...baseEvent(payload, sessionId, channelName),
     responseId: optionalString(payload.response_id),
     generationId: optionalString(payload.generation_id),
+    ...(supersedesGenerationId === undefined ? {} : { supersedesGenerationId }),
+    ...(supersededByGenerationId === undefined ? {} : { supersededByGenerationId }),
+    ...(reason === undefined ? {} : { reason }),
     ...(output === undefined ? {} : { output }),
+  };
+}
+
+function responseSpokenTextEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  channelName: string,
+): VoxRtcResponseSpokenTextEvent {
+  return {
+    ...responseEvent(payload, sessionId, channelName),
+    spokenText: requiredString(payload.spoken_text, ""),
+    partialStatus: requiredString(payload.partial_status, "partial_omitted"),
+    playedAudioMs: optionalNumber(payload.played_audio_ms) ?? 0,
   };
 }
 
@@ -646,6 +667,12 @@ export class VoxRtcControlSession {
     });
   }
 
+  onResponseSpokenText(handler: (event: VoxRtcResponseSpokenTextEvent) => void): Unsubscribe {
+    return this.on(EVT_RESPONSE_SPOKEN_TEXT, (payload) => {
+      handler(responseSpokenTextEvent(payload, this.#sessionId, this.#channelName));
+    });
+  }
+
   onResponseAudioClear(handler: (event: VoxRtcResponseEvent) => void): Unsubscribe {
     return this.on(EVT_RESPONSE_AUDIO_CLEAR, (payload) => {
       handler(responseEvent(payload, this.#sessionId, this.#channelName));
@@ -752,6 +779,9 @@ export class VoxRtcControlSession {
     const payload: Record<string, unknown> = {
       generation_id: this.#responseGenerationId,
     };
+    if (options?.supersedesGenerationId !== undefined) {
+      payload.supersedes_generation_id = options.supersedesGenerationId;
+    }
     if (options?.output !== undefined) {
       payload.output = responseOutputPayload(options.output);
     }
@@ -816,6 +846,13 @@ export class VoxRtcControlSession {
 
       this.startResponse({ ...options, generationId });
     });
+  }
+
+  supersedeResponseAndWait(
+    supersedesGenerationId: string,
+    options?: VoxRtcStartResponseWaitOptions,
+  ): Promise<VoxRtcStartResponseResult> {
+    return this.startResponseAndWait({ ...options, supersedesGenerationId });
   }
 
   appendResponseText(delta: string, options?: VoxRtcResponseOptions): void {

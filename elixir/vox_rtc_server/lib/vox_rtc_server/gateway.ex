@@ -81,6 +81,7 @@ defmodule VoxRtcServer.Gateway.Socket do
     response_audio_clear: "response.audio.clear",
     response_done: "response.done",
     response_cancelled: "response.cancelled",
+    response_spoken_text: "response.spoken_text.resolved",
     turn_state_changed: "turn.state_changed",
     interruption_detected: "interruption.detected",
     interruption_false_positive: "interruption.false_positive",

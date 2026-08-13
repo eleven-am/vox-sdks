@@ -372,12 +372,14 @@ test("named event hooks map common Vox events", async () => {
   const transcripts: unknown[] = [];
   const turns: unknown[] = [];
   const responses: unknown[] = [];
+  const spokenResponses: unknown[] = [];
   const browserEvents: unknown[] = [];
   const closes: unknown[] = [];
 
   const unsubscribeTranscript = session.onTranscript((event) => transcripts.push(event));
   const unsubscribeTurn = session.onTurnStateChanged((event) => turns.push(event));
   const unsubscribeDone = session.onResponseDone((event) => responses.push(event));
+  const unsubscribeSpoken = session.onResponseSpokenText((event) => spokenResponses.push(event));
   const unsubscribeBrowser = session.onBrowserEvent((event) => browserEvents.push(event));
   const unsubscribeClose = session.onClose((event) => closes.push(event));
 
@@ -400,6 +402,14 @@ test("named event hooks map common Vox events", async () => {
     response_id: "resp_1",
     session_id: "rtc_123",
   });
+  fakeSocket.channel.emit("response.spoken_text.resolved", {
+    response_id: "resp_1",
+    generation_id: "gen_1",
+    spoken_text: "The words actually spoken",
+    partial_status: "matched",
+    played_audio_ms: 640,
+    session_id: "rtc_123",
+  });
   fakeSocket.channel.emit("browser.event", {
     event: "ui.select",
     payload: { id: "choice-a" },
@@ -416,6 +426,7 @@ test("named event hooks map common Vox events", async () => {
   unsubscribeTranscript();
   unsubscribeTurn();
   unsubscribeDone();
+  unsubscribeSpoken();
   unsubscribeBrowser();
   unsubscribeClose();
 
@@ -471,6 +482,23 @@ test("named event hooks map common Vox events", async () => {
     },
     responseId: "resp_1",
     generationId: undefined,
+  }]);
+  assert.deepEqual(spokenResponses, [{
+    sessionId: "rtc_123",
+    channelName: "/rtc/rtc_123",
+    data: {
+      response_id: "resp_1",
+      generation_id: "gen_1",
+      spoken_text: "The words actually spoken",
+      partial_status: "matched",
+      played_audio_ms: 640,
+      session_id: "rtc_123",
+    },
+    responseId: "resp_1",
+    generationId: "gen_1",
+    spokenText: "The words actually spoken",
+    partialStatus: "matched",
+    playedAudioMs: 640,
   }]);
   assert.deepEqual(browserEvents, [{
     sessionId: "rtc_123",
@@ -757,6 +785,23 @@ test("response commands thread an explicit generation id", async () => {
     { event: "response.cancel", payload: { generation_id: "gen-1" } },
     { event: "response.replace_text", payload: { text: "Replacement", generation_id: "gen-2" } },
   ]);
+});
+
+test("response.start carries the generation it atomically supersedes", async () => {
+  const { fakeSocket, session } = await attachedSession();
+
+  session.startResponse({
+    generationId: "gen-new",
+    supersedesGenerationId: "gen-old",
+  });
+
+  assert.deepEqual(fakeSocket.channel.sent, [{
+    event: "response.start",
+    payload: {
+      generation_id: "gen-new",
+      supersedes_generation_id: "gen-old",
+    },
+  }]);
 });
 
 test("response.start sends typed output overrides and exposes the resolved output", async () => {

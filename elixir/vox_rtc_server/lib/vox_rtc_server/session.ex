@@ -94,6 +94,22 @@ defmodule VoxRtcServer.Session do
     )
   end
 
+  @spec supersede_response_and_wait(t(), String.t(), ResponseOptions.t(), non_neg_integer()) ::
+          {:ok, StartAck.t()} | {:error, ErrorEvent.t()} | {:error, term()}
+  def supersede_response_and_wait(
+        session,
+        supersedes_generation_id,
+        %ResponseOptions{} = options \\ %ResponseOptions{},
+        timeout \\ 5_000
+      )
+      when is_binary(supersedes_generation_id) do
+    start_response_and_wait(
+      session,
+      %ResponseOptions{options | supersedes_generation_id: supersedes_generation_id},
+      timeout
+    )
+  end
+
   @spec append_response_text(t(), String.t(), ResponseOptions.t()) :: :ok | {:error, term()}
   def append_response_text(session, delta, options \\ %ResponseOptions{}) when is_binary(delta),
     do: response_command(session, :delta, delta, options)

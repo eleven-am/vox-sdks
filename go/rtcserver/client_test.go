@@ -488,6 +488,33 @@ func TestOnSpeechStarted(t *testing.T) {
 	}
 }
 
+func TestOnResponseSpokenText(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	var event ResponseSpokenTextEvent
+	session.OnResponseSpokenText(func(e ResponseSpokenTextEvent) {
+		event = e
+	})
+	fake.channel.emit(EventResponseSpokenText, map[string]interface{}{
+		"response_id":     "resp_1",
+		"generation_id":   "gen_1",
+		"spoken_text":     "The words actually spoken",
+		"partial_status":  "matched",
+		"played_audio_ms": 640.0,
+		"session_id":      "rtc_123",
+	})
+
+	if event.ResponseID != "resp_1" || event.GenerationID != "gen_1" {
+		t.Fatalf("unexpected response identity: %#v", event)
+	}
+	if event.SpokenText != "The words actually spoken" || event.PartialStatus != "matched" {
+		t.Fatalf("unexpected spoken text event: %#v", event)
+	}
+	if event.PlayedAudioMS != 640 {
+		t.Fatalf("unexpected played audio duration: %v", event.PlayedAudioMS)
+	}
+}
+
 func TestOnSpeechStopped(t *testing.T) {
 	fake, session := newAttachedSession(t)
 
@@ -686,6 +713,20 @@ func TestResponseOptionsGenerationIDThreadsOutboundPayloads(t *testing.T) {
 		if message.payload["generation_id"] != "gen-42" {
 			t.Fatalf("missing generation id on %s: %#v", message.event, message.payload)
 		}
+	}
+}
+
+func TestResponseStartCarriesSupersededGenerationIdentity(t *testing.T) {
+	fake, session := newAttachedSession(t)
+
+	session.StartResponse(&ResponseOptions{
+		GenerationID:           "gen-new",
+		SupersedesGenerationID: "gen-old",
+	})
+
+	sent := fake.channel.sentMessages()
+	if sent[0].payload["generation_id"] != "gen-new" || sent[0].payload["supersedes_generation_id"] != "gen-old" {
+		t.Fatalf("unexpected supersede payload: %#v", sent[0].payload)
 	}
 }
 

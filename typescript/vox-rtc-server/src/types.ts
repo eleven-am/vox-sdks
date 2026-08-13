@@ -193,8 +193,17 @@ export interface VoxRtcResponseEvent {
   channelName: string;
   responseId?: string;
   generationId?: string;
+  supersedesGenerationId?: string;
+  supersededByGenerationId?: string;
+  reason?: string;
   output?: VoxRtcResponseOutput;
   data: Record<string, unknown>;
+}
+
+export interface VoxRtcResponseSpokenTextEvent extends VoxRtcResponseEvent {
+  spokenText: string;
+  partialStatus: string;
+  playedAudioMs: number;
 }
 
 export interface VoxRtcInterruptionEvent extends VoxRtcResponseEvent {
@@ -260,6 +269,7 @@ export interface VoxRtcSignalingErrorEvent {
 export interface VoxRtcResponseOptions {
   allowInterruptions?: boolean;
   generationId?: string;
+  supersedesGenerationId?: string;
   output?: VoxRtcResponseOutputOptions;
 }
 

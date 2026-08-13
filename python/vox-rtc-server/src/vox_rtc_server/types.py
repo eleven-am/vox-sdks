@@ -56,6 +56,7 @@ class SessionConfig:
 class ResponseOptions:
     allow_interruptions: bool | None = None
     generation_id: str | None = None
+    supersedes_generation_id: str | None = None
     output: ResponseOutputOptions | None = None
 
 
@@ -214,7 +215,17 @@ class ResponseEvent:
     data: dict[str, Any]
     response_id: str | None = None
     generation_id: str | None = None
+    supersedes_generation_id: str | None = None
+    superseded_by_generation_id: str | None = None
+    reason: str | None = None
     output: ResponseOutput | None = None
+
+
+@dataclass(slots=True)
+class ResponseSpokenTextEvent(ResponseEvent):
+    spoken_text: str = ""
+    partial_status: str = "partial_omitted"
+    played_audio_ms: int = 0
 
 
 @dataclass(slots=True)

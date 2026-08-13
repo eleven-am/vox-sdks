@@ -189,7 +189,6 @@ defmodule Vox.TranscribeRequest do
   field(:language, 3, type: :string)
   field(:word_timestamps, 4, type: :bool, json_name: "wordTimestamps")
   field(:temperature, 5, type: :float)
-  field(:response_format, 6, type: :string, json_name: "responseFormat")
   field(:format_hint, 7, type: :string, json_name: "formatHint")
   field(:speech_context, 8, type: :bool, json_name: "speechContext")
 end
@@ -289,7 +288,6 @@ defmodule Vox.SynthesizeRequest do
   field(:voice, 3, type: :string)
   field(:speed, 4, type: :float)
   field(:language, 5, type: :string)
-  field(:response_format, 6, type: :string, json_name: "responseFormat")
   field(:params, 7, type: Google.Protobuf.Struct)
 end
 
@@ -939,6 +937,20 @@ defmodule Vox.ConverseServerMessage do
     json_name: "transcriptDelta",
     oneof: 0
   )
+
+  field(:audio_suspend, 19,
+    type: Vox.ConversationAudioSuspend,
+    json_name: "audioSuspend",
+    oneof: 0
+  )
+
+  field(:audio_resume, 20, type: Vox.ConversationAudioResume, json_name: "audioResume", oneof: 0)
+
+  field(:response_spoken_text, 21,
+    type: Vox.ConversationResponseSpokenText,
+    json_name: "responseSpokenText",
+    oneof: 0
+  )
 end
 
 defmodule Vox.RtcSessionAttached do
@@ -1136,6 +1148,7 @@ defmodule Vox.ConversationResponseStart do
 
   field(:generation_id, 2, type: :string, json_name: "generationId")
   field(:output, 3, type: Vox.ConversationResponseOutput)
+  field(:supersedes_generation_id, 4, type: :string, json_name: "supersedesGenerationId")
 end
 
 defmodule Vox.ConversationResponseDelta do
@@ -1273,6 +1286,7 @@ defmodule Vox.ConversationResponseCreated do
   field(:response_id, 1, type: :string, json_name: "responseId")
   field(:generation_id, 2, type: :string, json_name: "generationId")
   field(:output, 3, type: Vox.ConversationResponseOutput)
+  field(:supersedes_generation_id, 4, type: :string, json_name: "supersedesGenerationId")
 end
 
 defmodule Vox.ConversationAudioDelta do
@@ -1299,6 +1313,34 @@ defmodule Vox.ConversationAudioClear do
 
   field(:response_id, 1, type: :string, json_name: "responseId")
   field(:generation_id, 2, type: :string, json_name: "generationId")
+  field(:reason, 3, type: :string)
+  field(:superseded_by_generation_id, 4, type: :string, json_name: "supersededByGenerationId")
+end
+
+defmodule Vox.ConversationAudioSuspend do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "vox.ConversationAudioSuspend",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:response_id, 1, type: :string, json_name: "responseId")
+  field(:candidate_id, 2, type: :uint64, json_name: "candidateId")
+  field(:generation_id, 3, type: :string, json_name: "generationId")
+end
+
+defmodule Vox.ConversationAudioResume do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "vox.ConversationAudioResume",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:response_id, 1, type: :string, json_name: "responseId")
+  field(:candidate_id, 2, type: :uint64, json_name: "candidateId")
+  field(:generation_id, 3, type: :string, json_name: "generationId")
 end
 
 defmodule Vox.ConversationInterruptionDetected do
@@ -1370,6 +1412,23 @@ defmodule Vox.ConversationResponseCancelled do
 
   field(:response_id, 1, type: :string, json_name: "responseId")
   field(:generation_id, 2, type: :string, json_name: "generationId")
+  field(:reason, 3, type: :string)
+  field(:superseded_by_generation_id, 4, type: :string, json_name: "supersededByGenerationId")
+end
+
+defmodule Vox.ConversationResponseSpokenText do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "vox.ConversationResponseSpokenText",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto3
+
+  field(:response_id, 1, type: :string, json_name: "responseId")
+  field(:generation_id, 2, type: :string, json_name: "generationId")
+  field(:spoken_text, 3, type: :string, json_name: "spokenText")
+  field(:partial_status, 4, type: :string, json_name: "partialStatus")
+  field(:played_audio_ms, 5, type: :uint32, json_name: "playedAudioMs")
 end
 
 defmodule Vox.ConversationStateChanged do

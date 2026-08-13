@@ -100,12 +100,14 @@ message DeleteResponse {
 }
 
 message TranscribeRequest {
+  reserved 6;
+  reserved "response_format";
+
   bytes audio = 1;
   string model = 2;
   string language = 3;
   bool word_timestamps = 4;
   float temperature = 5;
-  string response_format = 6;
   string format_hint = 7;
   bool speech_context = 8;
 }
@@ -154,12 +156,14 @@ message WordTimestamp {
 }
 
 message SynthesizeRequest {
+  reserved 6;
+  reserved "response_format";
+
   string model = 1;
   string input = 2;
   string voice = 3;
   float speed = 4;
   string language = 5;
-  string response_format = 6;
   google.protobuf.Struct params = 7;
 }
 
@@ -451,6 +455,9 @@ message ConverseServerMessage {
     ConversationInterruptionFalsePositive interruption_false_positive = 14;
     ConversationTurnEouPredicted turn_eou_predicted = 15;
     ConversationTranscriptDelta transcript_delta = 18;
+    ConversationAudioSuspend audio_suspend = 19;
+    ConversationAudioResume audio_resume = 20;
+    ConversationResponseSpokenText response_spoken_text = 21;
   }
   reserved 16, 17;
   reserved "rtc_session_attached", "client_event";
@@ -522,6 +529,7 @@ message ConversationResponseStart {
   optional bool allow_interruptions = 1;
   string generation_id = 2;
   ConversationResponseOutput output = 3;
+  string supersedes_generation_id = 4;
 }
 
 message ConversationResponseDelta {
@@ -578,6 +586,7 @@ message ConversationResponseCreated {
   string response_id = 1;
   string generation_id = 2;
   ConversationResponseOutput output = 3;
+  string supersedes_generation_id = 4;
 }
 
 message ConversationAudioDelta {
@@ -590,6 +599,20 @@ message ConversationAudioDelta {
 message ConversationAudioClear {
   string response_id = 1;
   string generation_id = 2;
+  string reason = 3;
+  string superseded_by_generation_id = 4;
+}
+
+message ConversationAudioSuspend {
+  string response_id = 1;
+  uint64 candidate_id = 2;
+  string generation_id = 3;
+}
+
+message ConversationAudioResume {
+  string response_id = 1;
+  uint64 candidate_id = 2;
+  string generation_id = 3;
 }
 
 message ConversationInterruptionDetected {
@@ -626,6 +649,16 @@ message ConversationResponseDone {
 message ConversationResponseCancelled {
   string response_id = 1;
   string generation_id = 2;
+  string reason = 3;
+  string superseded_by_generation_id = 4;
+}
+
+message ConversationResponseSpokenText {
+  string response_id = 1;
+  string generation_id = 2;
+  string spoken_text = 3;
+  string partial_status = 4;
+  uint32 played_audio_ms = 5;
 }
 
 message ConversationStateChanged {

@@ -108,11 +108,12 @@ end
 defmodule VoxRtcServer.ResponseOptions do
   @moduledoc "Response generation options."
 
-  defstruct [:allow_interruptions, :generation_id, :output]
+  defstruct [:allow_interruptions, :generation_id, :supersedes_generation_id, :output]
 
   @type t :: %__MODULE__{
           allow_interruptions: boolean() | nil,
           generation_id: String.t() | nil,
+          supersedes_generation_id: String.t() | nil,
           output: VoxRtcServer.ResponseOutputOptions.t() | nil
         }
 end
@@ -460,6 +461,7 @@ defmodule VoxRtcServer.Event do
           | :response_audio_clear
           | :response_done
           | :response_cancelled
+          | :response_spoken_text
           | :turn_state_changed
           | :interruption_detected
           | :interruption_false_positive

@@ -12,6 +12,7 @@ pub const EVENT_RESPONSE_CANCELLED: &str = "response.cancelled";
 pub const EVENT_RESPONSE_COMMITTED: &str = "response.committed";
 pub const EVENT_RESPONSE_CREATED: &str = "response.created";
 pub const EVENT_RESPONSE_DONE: &str = "response.done";
+pub const EVENT_RESPONSE_SPOKEN_TEXT: &str = "response.spoken_text.resolved";
 pub const EVENT_RTC_SESSION_ATTACHED: &str = "rtc.session.attached";
 pub const EVENT_RTC_SIGNALING_ERROR: &str = "rtc.signaling_error";
 pub const EVENT_SESSION_CREATED: &str = "session.created";
@@ -84,6 +85,7 @@ pub struct SessionConfig {
 pub struct ResponseOptions {
     pub allow_interruptions: Option<bool>,
     pub generation_id: Option<String>,
+    pub supersedes_generation_id: Option<String>,
     pub output: Option<ResponseOutputOptions>,
 }
 
@@ -323,7 +325,18 @@ pub struct ResponseEvent {
     pub data: EventData,
     pub response_id: Option<String>,
     pub generation_id: Option<String>,
+    pub supersedes_generation_id: Option<String>,
+    pub superseded_by_generation_id: Option<String>,
+    pub reason: Option<String>,
     pub output: Option<ResponseOutput>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResponseSpokenTextEvent {
+    pub response: ResponseEvent,
+    pub spoken_text: String,
+    pub partial_status: String,
+    pub played_audio_ms: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -408,7 +421,9 @@ pub(crate) fn optional_nonempty_string(data: &EventData, key: &str) -> Option<St
 }
 
 pub(crate) fn recoverable_flag(data: &EventData) -> bool {
-    data.get("recoverable").and_then(Value::as_bool).unwrap_or(true)
+    data.get("recoverable")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 pub(crate) fn optional_string_vec(data: &EventData, key: &str) -> Option<Vec<String>> {
@@ -432,7 +447,10 @@ fn transcript_entity(value: &Value) -> Option<TranscriptEntity> {
     Some(TranscriptEntity {
         r#type: optional_string(object, "type").unwrap_or_default(),
         text: optional_string(object, "text").unwrap_or_default(),
-        start_char: object.get("start_char").and_then(Value::as_u64).unwrap_or(0),
+        start_char: object
+            .get("start_char")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
         end_char: object.get("end_char").and_then(Value::as_u64).unwrap_or(0),
     })
 }

@@ -87,6 +87,9 @@ When omitted, the session generates one on `start_response` and threads it
 through the follow-up commands automatically. Lifecycle events
 (`response.created|committed|done|cancelled`, `response.audio.clear`,
 `interruption.*`) expose the correlated `generation_id` when known.
+`on_response_spoken_text` emits the conservative generated prefix verified at
+RTC playout for a cancelled response; persist `spoken_text` as assistant
+history for the interrupted turn.
 
 Use `start_response_and_wait` to gate delta pumping on the start
 acknowledgement instead of fire-and-forget:
@@ -144,3 +147,6 @@ those errors as recoverable unless the transport closed.
 `on_signaling_error`. It is terminal: Vox emits `message` and an optional
 numeric `generation`, then closes the session. There is no `recoverable`
 field — treat it as call-ending and recreate the session.
+
+Use `supersede_response_and_wait` to atomically replace a named active
+generation without routing the action through user-speech interruption logic.

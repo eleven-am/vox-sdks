@@ -5,9 +5,9 @@ use serde_json::Value;
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
-use uuid::Uuid;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct VoxRtcControlSession {
@@ -317,6 +317,22 @@ impl VoxRtcControlSession {
         self.on_response_event(EVENT_RESPONSE_CANCELLED, handler)
     }
 
+    pub fn on_response_spoken_text<F>(&self, handler: F) -> Listener
+    where
+        F: Fn(ResponseSpokenTextEvent) + Send + Sync + 'static,
+    {
+        let session_id = self.session_id.clone();
+        let channel_name = self.channel_name.clone();
+        self.on(EVENT_RESPONSE_SPOKEN_TEXT, move |payload| {
+            handler(ResponseSpokenTextEvent {
+                response: response_event(payload.clone(), &session_id, &channel_name),
+                spoken_text: required_string(&payload, "spoken_text", ""),
+                partial_status: required_string(&payload, "partial_status", "partial_omitted"),
+                played_audio_ms: optional_number(&payload, "played_audio_ms").unwrap_or(0.0),
+            });
+        })
+    }
+
     pub fn on_response_audio_clear<F>(&self, handler: F) -> Listener
     where
         F: Fn(ResponseEvent) + Send + Sync + 'static,
@@ -538,6 +554,18 @@ impl VoxRtcControlSession {
         .map_err(|_| VoxRtcError::Timeout("response.start acknowledgement"))?
     }
 
+    pub async fn supersede_response_and_wait(
+        &self,
+        supersedes_generation_id: impl Into<String>,
+        options: Option<ResponseOptions>,
+        wait_timeout: Duration,
+    ) -> Result<StartAck> {
+        let mut options = options.unwrap_or_default();
+        options.supersedes_generation_id = Some(supersedes_generation_id.into());
+        self.start_response_and_wait(Some(options), wait_timeout)
+            .await
+    }
+
     pub async fn append_response_text(
         &self,
         delta: impl Into<String>,
@@ -719,6 +747,11 @@ fn response_options_payload(options: Option<ResponseOptions>) -> EventData {
         if let Some(allow) = options.allow_interruptions {
             payload.insert("allow_interruptions".to_owned(), Value::Bool(allow));
         }
+        insert_opt(
+            &mut payload,
+            "supersedes_generation_id",
+            options.supersedes_generation_id,
+        );
         if let Some(output) = options.output {
             payload.insert(
                 "output".to_owned(),
@@ -759,6 +792,12 @@ fn response_event(payload: EventData, session_id: &str, channel_name: &str) -> R
         channel_name: channel_name.to_owned(),
         response_id: optional_string(&payload, "response_id"),
         generation_id: optional_nonempty_string(&payload, "generation_id"),
+        supersedes_generation_id: optional_nonempty_string(&payload, "supersedes_generation_id"),
+        superseded_by_generation_id: optional_nonempty_string(
+            &payload,
+            "superseded_by_generation_id",
+        ),
+        reason: optional_nonempty_string(&payload, "reason"),
         output,
         data: payload,
     }
@@ -936,6 +975,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_payload_carries_superseded_generation_identity() {
+        let (session, _) = session().await;
+        let options = ResponseOptions {
+            generation_id: Some("gen-new".to_owned()),
+            supersedes_generation_id: Some("gen-old".to_owned()),
+            ..Default::default()
+        };
+
+        let (_, start) = session.start_payload(Some(options));
+
+        assert_eq!(
+            start.get("supersedes_generation_id"),
+            Some(&Value::String("gen-old".to_owned()))
+        );
+    }
+
+    #[tokio::test]
     async fn start_payload_generates_generation_id_when_absent() {
         let (session, _) = session().await;
         let (generation_id, start) = session.start_payload(None);
@@ -1008,6 +1064,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spoken_text_event_exposes_canonical_prefix_fields() {
+        let (session, sender) = session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let _listener = session.on_response_spoken_text(move |event| {
+            tx.send(event).unwrap();
+        });
+        sender
+            .send((
+                EVENT_RESPONSE_SPOKEN_TEXT.to_owned(),
+                payload(json!({
+                    "response_id": "resp-1",
+                    "generation_id": "gen-1",
+                    "spoken_text": "The words actually spoken",
+                    "partial_status": "matched",
+                    "played_audio_ms": 640
+                })),
+            ))
+            .unwrap();
+        let event = recv(&mut rx).await;
+        assert_eq!(event.response.response_id.as_deref(), Some("resp-1"));
+        assert_eq!(event.response.generation_id.as_deref(), Some("gen-1"));
+        assert_eq!(event.spoken_text, "The words actually spoken");
+        assert_eq!(event.partial_status, "matched");
+        assert_eq!(event.played_audio_ms, 640.0);
+    }
+
+    #[tokio::test]
     async fn audio_clear_and_interruption_expose_generation_id() {
         let (session, sender) = session().await;
         let (clear_tx, mut clear_rx) = mpsc::unbounded_channel();
@@ -1037,7 +1120,10 @@ mod tests {
         let clear = recv(&mut clear_rx).await;
         assert_eq!(clear.generation_id.as_deref(), Some("gen-2"));
         let interruption = recv(&mut int_rx).await;
-        assert_eq!(interruption.response.generation_id.as_deref(), Some("gen-2"));
+        assert_eq!(
+            interruption.response.generation_id.as_deref(),
+            Some("gen-2")
+        );
         assert_eq!(interruption.vad_active_ms, Some(250.0));
     }
 
