@@ -117,7 +117,8 @@ Each conversation `error` frame carries `message`, `code`, `recoverable`, and
 `generationId`. `code` values are the stable contract set exported as
 `VOX_ERROR_CODES` (check membership with `isVoxErrorCode`). Old Vox servers
 omit `code` and `recoverable`; the SDK normalizes an empty `code` to
-`undefined` and treats missing `recoverable` as `true`.
+`undefined` and treats missing `recoverable` as `true`. Conversation errors do
+not also emit the generic `error` event.
 
 A WebRTC signaling failure (`rtc.signaling_error`, which Vox sends as
 `{ message, generation }`) is different: it is terminal — Vox closes the session

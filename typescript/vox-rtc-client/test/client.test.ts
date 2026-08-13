@@ -201,6 +201,9 @@ class MockWebSocket implements WebSocketLike {
       data: JSON.stringify({ ...(id ? { id } : {}), type, data }),
     } as MessageEvent<string>);
   }
+  fail() {
+    this.onerror?.({} as Event);
+  }
   close(code = 1000, reason = "") {
     if (this.readyState === 3) return;
     this.readyState = 3;
@@ -858,10 +861,23 @@ test("unexpected gateway close tears down media and reports closed state", async
   assert.ok(errors.some((message) => message.includes("server_failed")));
 });
 
+test("a WebSocket failure during connect emits one generic error", async () => {
+  const { client, sockets } = createHarness();
+  const errors: string[] = [];
+  client.on("error", (error) => errors.push(error.message));
+  const connecting = client.connect();
+  itemAt(sockets, 0, "gateway socket").fail();
+  await assert.rejects(connecting, /RTC gateway WebSocket failed/);
+  assert.deepEqual(errors, ["RTC gateway WebSocket failed"]);
+  assert.equal(client.state.status, "closed");
+});
+
 test("signaling error frames surface as typed session errors", async () => {
   const { client, sockets } = createHarness({ onSocket: answerOffers });
   const errors: VoxRtcSessionError[] = [];
+  const transportErrors: string[] = [];
   client.onSessionError((error) => errors.push(error));
+  client.on("error", (error) => transportErrors.push(error.message));
   await client.connect();
   const socket = itemAt(sockets, 0, "gateway socket");
   socket.server("error", {
@@ -897,6 +913,27 @@ test("signaling error frames surface as typed session errors", async () => {
     },
   ]);
   assert.deepEqual(errors.map(isFatalVoxError), [false, true, false]);
+  assert.deepEqual(transportErrors, []);
+  assert.equal(client.state.status, "connected");
+  await client.disconnect();
+});
+
+test("an application signaling listener failure does not become a gateway protocol failure", async () => {
+  const { client, sockets } = createHarness({ onSocket: answerOffers });
+  const transportErrors: string[] = [];
+  client.on("error", (error) => transportErrors.push(error.message));
+  client.on("signalingMessage", () => {
+    throw new Error("application listener failed");
+  });
+  await client.connect();
+  const socket = itemAt(sockets, 0, "gateway socket");
+  assert.throws(
+    () => socket.server("turn.state_changed", { state: "listening" }),
+    /application listener failed/,
+  );
+  assert.deepEqual(transportErrors, []);
+  assert.equal(socket.readyState, 1);
+  assert.equal(client.state.status, "connected");
   await client.disconnect();
 });
 
@@ -970,9 +1007,22 @@ test("a conversation error during a pending offer does not fail the negotiation"
       };
     },
   });
+  const sessionErrors: VoxRtcSessionError[] = [];
+  const transportErrors: string[] = [];
+  client.onSessionError((error) => sessionErrors.push(error));
+  client.on("error", (error) => transportErrors.push(error.message));
   const session = await client.connect();
   assert.equal(session.sessionId, READY_SESSION.sessionId);
   assert.equal(client.state.status, "connected");
+  assert.deepEqual(sessionErrors, [
+    {
+      message: "stale generation",
+      code: "response_stale_generation",
+      recoverable: true,
+      generationId: undefined,
+    },
+  ]);
+  assert.deepEqual(transportErrors, []);
   await client.disconnect();
 });
 

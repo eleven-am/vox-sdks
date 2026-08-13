@@ -1,7 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 
-import { VoxRtcBrowserClient } from "@eleven-am/vox-rtc-client";
+import { isFatalVoxError, VoxRtcBrowserClient } from "@eleven-am/vox-rtc-client";
 
 import "./styles.css";
 
@@ -64,6 +64,13 @@ class App extends React.Component {
         this.record(event.type, event.data);
         if (event.type === TRANSCRIPT_EVENT && typeof event.data.transcript === "string") {
           this.setState({ transcript: event.data.transcript });
+        }
+      }),
+      client.onSessionError((error) => {
+        this.record("session.error", error);
+        if (isFatalVoxError(error)) {
+          this.setState({ error: error.message ?? "Call session error" });
+          void this.disconnect();
         }
       }),
       client.on("error", (error) => this.setState({ error: error.message })),

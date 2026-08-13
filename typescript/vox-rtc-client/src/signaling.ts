@@ -153,47 +153,65 @@ export class GatewaySignalingClient {
         rejectReady(error);
         socket.close(1000, "Gateway timeout");
       }, this.#timeoutMs);
-      const rejectReady = (error: Error) => {
-        if (settled) return;
+      const rejectReady = (error: Error): boolean => {
+        if (settled) return false;
         settled = true;
         clearTimeout(timer);
         reject(error);
+        return true;
       };
 
       socket.onmessage = (message) => {
+        let event: VoxRtcSignalingEvent;
         try {
-          const event = parseEvent(message.data);
-          if (!settled) {
-            if (event.type === "gateway.error") {
-              rejectReady(gatewayError(event));
-              return;
-            }
-            if (event.type !== "gateway.ready") {
-              queued.push(event);
-              return;
-            }
-            const session = normalizeReady(event.data);
-            settled = true;
-            clearTimeout(timer);
-            resolve(session);
-            queued.forEach((item) => {
-              this.#dispatch(item);
-            });
-            return;
-          }
-          this.#dispatch(event);
+          event = parseEvent(message.data);
         } catch (error) {
           const normalized =
             error instanceof Error ? error : new Error(String(error));
-          rejectReady(normalized);
-          this.#onError(normalized);
+          const rejected = rejectReady(normalized);
+          this.#rejectPending(normalized);
+          this.#socket = null;
+          detachSocketHandlers(socket);
           socket.close(1002, "Invalid gateway message");
+          if (!rejected && !this.#closed) {
+            this.#onClose(normalized.message);
+          }
+          return;
         }
+        if (!settled) {
+          if (event.type === "gateway.error") {
+            rejectReady(gatewayError(event));
+            return;
+          }
+          if (event.type !== "gateway.ready") {
+            queued.push(event);
+            return;
+          }
+          let session: VoxRtcBrowserSessionBootstrap;
+          try {
+            session = normalizeReady(event.data);
+          } catch (error) {
+            const normalized =
+              error instanceof Error ? error : new Error(String(error));
+            rejectReady(normalized);
+            detachSocketHandlers(socket);
+            this.#socket = null;
+            socket.close(1002, "Invalid gateway ready event");
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          resolve(session);
+          for (const item of queued) {
+            this.#dispatch(item);
+          }
+          return;
+        }
+        this.#dispatch(event);
       };
       socket.onerror = () => {
         const error = new Error("RTC gateway WebSocket failed");
         rejectReady(error);
-        this.#onError(error);
       };
       socket.onclose = (event) => {
         const reason = event.reason || `gateway_closed_${event.code}`;
@@ -296,7 +314,7 @@ export class GatewaySignalingClient {
         return;
       }
     }
-    if (event.type === "gateway.error" || event.type === "error") {
+    if (event.type === "gateway.error") {
       this.#onError(gatewayError(event));
     }
     this.#onEvent(event);
