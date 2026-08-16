@@ -228,6 +228,26 @@ session.onError((event) => {
 and closes the session immediately after. The event carries no `code` and no
 `recoverable` field — treat every `onSignalingError` as call-ending.
 
+## Browser connection keepalive
+
+The gateway pings each browser WebSocket every 30 seconds and terminates a
+connection that misses a ping/pong round trip. Without it an idle control
+socket sends nothing between turns, and proxies, tunnels, and CDNs reap idle
+WebSockets — the browser then observes an abnormal `1006` close while the
+WebRTC media path is still healthy. The ping also gives the gateway dead-peer
+detection, so a wedged browser releases its Vox session instead of holding it
+open.
+
+Override the cadence with `keepAliveIntervalMs` when an intermediary reaps
+faster than 30 seconds:
+
+```ts
+const gateway = createVoxRtcGateway({
+  voxHttpBase: process.env.VOX_HTTP_BASE!,
+  keepAliveIntervalMs: 15_000,
+});
+```
+
 ## Reconnection
 
 The underlying PondSocket client reconnects the socket with exponential backoff

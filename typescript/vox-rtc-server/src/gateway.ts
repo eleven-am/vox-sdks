@@ -34,6 +34,7 @@ export interface VoxRtcGatewayOptions {
     context: VoxRtcGatewayClosedContext,
   ) => void | Promise<void>;
   onError?: (error: Error) => void;
+  keepAliveIntervalMs?: number;
 }
 
 interface GatewayControlClient {
@@ -166,6 +167,18 @@ function negotiationGeneration(
   return Number(value);
 }
 
+const DEFAULT_KEEP_ALIVE_INTERVAL_MS = 30_000;
+
+function keepAliveInterval(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_KEEP_ALIVE_INTERVAL_MS;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("keepAliveIntervalMs must be a positive finite number");
+  }
+  return value;
+}
+
 export interface VoxRtcGateway {
   attach(server: HttpServer): () => void;
   handleUpgrade(
@@ -183,6 +196,7 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
   readonly #webSocketServer = new WebSocketServer({ noServer: true });
   readonly #active = new Set<ActiveGatewaySession>();
   readonly #opening = new Set<Promise<void>>();
+  readonly #keepAliveIntervalMs: number;
   #shutdownReason: string | null = null;
   #closePromise: Promise<void> | null = null;
 
@@ -190,6 +204,31 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
     this.#options = options;
     this.#client = client;
     this.#path = normalizePath(options.path ?? "/api/vox/rtc");
+    this.#keepAliveIntervalMs = keepAliveInterval(options.keepAliveIntervalMs);
+  }
+
+  #startKeepAlive(ws: WebSocket): () => void {
+    let awaitingPong = false;
+    const onPong = () => {
+      awaitingPong = false;
+    };
+    ws.on("pong", onPong);
+    const timer = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (awaitingPong) {
+        ws.terminate();
+        return;
+      }
+      awaitingPong = true;
+      ws.ping();
+    }, this.#keepAliveIntervalMs);
+    timer.unref?.();
+    return () => {
+      clearInterval(timer);
+      ws.off("pong", onPong);
+    };
   }
 
   attach(server: HttpServer): () => void {
@@ -266,7 +305,9 @@ class DefaultVoxRtcGateway implements VoxRtcGateway {
     let active: ActiveGatewaySession | null = null;
     let browserClosed =
       ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED;
+    const stopKeepAlive = this.#startKeepAlive(ws);
     ws.once("close", () => {
+      stopKeepAlive();
       browserClosed = true;
       if (active) void this.#requestClose(active, "browser_disconnected");
     });

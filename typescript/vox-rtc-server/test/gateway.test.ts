@@ -976,3 +976,66 @@ test("gateway shutdown during session creation closes the eventual backend sessi
     await closeServer(server);
   }
 });
+
+test("gateway pings an idle browser connection so intermediaries do not reap it", async () => {
+  const session = new FakeSession();
+  const server = createServer();
+  const { gateway } = createTestGateway(session, { keepAliveIntervalMs: 25 });
+  const detach = gateway.attach(server);
+  const port = await listen(server);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vox/rtc`);
+  let pings = 0;
+  ws.on("ping", () => {
+    pings += 1;
+  });
+
+  try {
+    await once(ws, "open");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.ok(pings >= 2, `expected repeated pings, saw ${pings}`);
+    assert.equal(ws.readyState, WebSocket.OPEN);
+    assert.equal(session.closeCalls, 0);
+  } finally {
+    if (ws.readyState === WebSocket.OPEN) ws.close();
+    detach();
+    await closeServer(server);
+  }
+});
+
+test("gateway terminates a browser connection that stops answering pings", async () => {
+  const session = new FakeSession();
+  const server = createServer();
+  const closed: string[] = [];
+  let signalClosed: () => void = () => {};
+  const closedOnce = new Promise<void>((resolve, reject) => {
+    signalClosed = resolve;
+    const bail = setTimeout(
+      () => reject(new Error("gateway never terminated the unresponsive peer")),
+      2_000,
+    );
+    bail.unref?.();
+  });
+  const { gateway } = createTestGateway(session, {
+    keepAliveIntervalMs: 25,
+    onSessionClosed: (context) => {
+      closed.push(context.reason);
+      signalClosed();
+    },
+  });
+  const detach = gateway.attach(server);
+  const port = await listen(server);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vox/rtc`);
+
+  try {
+    await once(ws, "open");
+    ws.pause();
+    await closedOnce;
+    assert.equal(session.closeCalls, 1);
+    assert.deepEqual(closed, ["browser_disconnected"]);
+  } finally {
+    ws.resume();
+    ws.terminate();
+    detach();
+    await closeServer(server);
+  }
+});
